@@ -1,0 +1,20 @@
+
+app/(marketing)/blog/[...slug]/page.tsx
+   135  low     Tailwind's default white (#FFFFFF) is not one of the design system's colours
+                → Use bg-background (--background)
+   139  low     Arbitrary font size text-[12px]
+                → Use a text-* size from the type scale (text-sm is 14px, text-base 16px)
+
+app/(marketing)/page.tsx
+    73  medium  Tailwind's default slate-50 (#F8FAFC) is not one of the design system's colours
+                → Use bg-primary-foreground (--primary-foreground)
+
+app/api/og/route.tsx
+    28  high    Hardcoded colour #fff
+                → Use hsl(var(--background))
+    28  high    Hardcoded colour #000
+                → No token has exactly this value. Nearest: hsl(var(--primary)) (#0F172A), the nearest, but clearly different
+    81  low     Arbitrary font size text-[80px]
+                → Use a text-* size from the type scale (text-sm is 14px, text-base 16px)
+
+✖ 35 files checked: 6 findings (2 high, 1 medium, 3 low) in 3 files

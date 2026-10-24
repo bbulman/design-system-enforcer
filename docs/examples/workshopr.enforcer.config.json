@@ -1,0 +1,52 @@
+{
+  "_comment": "A hand-written config for a PHP codebase that generates its own catalog (components.generated.json) and has three SwiftUI apps. Most projects don't need one: ds-enforcer init writes enforcer.config.json for you.",
+  "name": "Workshopr",
+  "projectRoot": "../../..",
+  "framework": "php",
+  "tokensCss": "design-system/platform-tokens.css",
+  "catalog": "design-system/components.generated.json",
+  "synonyms": "design-system/synonyms.json",
+  "nativeManifest": "design-system/workshopr-design-system.json",
+  "searchModule": "scripts/ds-search.mjs",
+  "rootPx": 12.8,
+  "exemptFiles": [
+    "platform-tokens.css",
+    "workshopr-design-system.json",
+    "helpers.php",
+    "components.css"
+  ],
+  "exemptDirs": [
+    "node_modules",
+    "vendor",
+    ".git",
+    ".claude/mcp-servers",
+    "design-system/platform-tokens.css"
+  ],
+  "rawControlSkip": [
+    "^vendor/",
+    "^node_modules/",
+    "^\\.git/",
+    "^tests/",
+    "^design-system/",
+    "^includes/components/",
+    "\\.legacy\\.php$"
+  ],
+  "docs": {
+    "web": "design-system/START-HERE.md",
+    "native": "design-system/native.md"
+  },
+  "rules": {
+    "pureBlack": {
+      "enabled": true,
+      "severity": "high",
+      "message": "Pure black (#000) violates design rules — use warm neutrals",
+      "suggestion": "Use var(--color-ink) (#2C2416) for text, var(--gray-900) for darkest bg"
+    },
+    "pureWhite": {
+      "enabled": true,
+      "severity": "medium",
+      "message": "Pure white background violates design rules — use warm off-whites",
+      "suggestion": "Use var(--bg-page) or var(--bg-surface)"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+@import "tailwindcss";
+@theme {
+  --color-brand: #7C3AED;
+  --color-ink: #1F2937;
+  --color-paper: #FAFAF9;
+  --color-danger: #DC2626;
+  --radius-card: 12px;
+}
+.callout { @apply bg-blue-50 text-ink p-[13px]; }
+:root{--space-2:8px;--space-4:16px}

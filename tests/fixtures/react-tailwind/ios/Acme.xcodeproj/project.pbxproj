@@ -1,0 +1,2 @@
+// !$*UTF8*$!
+// Placeholder: the fixture only needs an .xcodeproj folder to mark the app root.

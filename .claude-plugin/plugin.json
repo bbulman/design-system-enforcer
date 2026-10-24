@@ -1,0 +1,20 @@
+{
+  "name": "design-system-enforcer",
+  "version": "1.2.0",
+  "description": "Keeps Claude inside your design system: tells it which tokens and components exist before it writes UI, and checks every file it edits.",
+  "author": {
+    "name": "Bill Bulman",
+    "url": "https://workshopr.io"
+  },
+  "homepage": "https://github.com/bbulman/design-system-enforcer",
+  "repository": "https://github.com/bbulman/design-system-enforcer",
+  "license": "MIT",
+  "mcpServers": {
+    "design-system-enforcer": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/index.js"
+      ]
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "name": "design-system-enforcer",
+  "version": "1.2.0",
+  "description": "Keeps AI coding agents inside your design system: an MCP server and CLI that reads your tokens and components, tells the agent what exists, and checks what it wrote (Tailwind, React, Vue, Svelte, CSS, SwiftUI, Figma variables, accessibility).",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "ds-enforcer": "bin/ds-enforcer.mjs"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node tests/run.mjs",
+    "init": "node bin/ds-enforcer.mjs init",
+    "sync": "node bin/ds-enforcer.mjs sync",
+    "check": "node bin/ds-enforcer.mjs check"
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "license": "MIT",
+  "author": "Bill Bulman (https://workshopr.io)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bbulman/design-system-enforcer.git"
+  },
+  "homepage": "https://github.com/bbulman/design-system-enforcer#readme",
+  "bugs": {
+    "url": "https://github.com/bbulman/design-system-enforcer/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "design-system",
+    "design-tokens",
+    "claude",
+    "claude-code",
+    "tailwind",
+    "shadcn",
+    "lint",
+    "accessibility",
+    "figma",
+    "swiftui"
+  ],
+  "files": [
+    "*.js",
+    "*.mjs",
+    "bin/",
+    "init/",
+    "data/",
+    "hooks/",
+    ".claude-plugin/",
+    "action.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

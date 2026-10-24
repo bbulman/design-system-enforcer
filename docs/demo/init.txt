@@ -1,0 +1,38 @@
+
+Design System Enforcer: connect your design system
+Project: ~/code/taxonomy
+
+Scanning for tokens and components...
+
+Tokens: CSS variables
+  ✓ [1] styles/globals.css  20 CSS variables
+Components: React
+    [2] components  66 React component files
+  ✓ [3] components/ui  36 React component files
+
+Connect which? Numbers like 1,3 or 1-4, "all", or Enter for the ✓ ones: 
+Add a path the scan missed (a tokens file or a components folder), or Enter to go on: 
+What does 1rem equal on your pages, in px? (Enter for 16): 
+Flag pure black (#000) as a house rule? (y/N): n
+Flag pure white backgrounds as a house rule? (y/N): n
+Check each file automatically after Claude edits it (a Claude Code hook)? (y/N): n
+
+About to connect:
+  Tokens: CSS variables: styles/globals.css
+  Components: React: components/ui
+  1rem = 16px; house rules: none
+Write enforcer.config.json and .ds-enforcer/? (Y/n): y
+
+Connected (react).
+  20 tokens: 19 colors, 1 radius
+  153 components
+  Tailwind v3: class names are checked too
+
+Next:
+  1. Add it to Claude Code, from this folder:
+       claude mcp add design-system-enforcer -- node /path/to/design-system-enforcer/index.js
+  2. Teach it your words in .ds-enforcer/synonyms.json (e.g. "Dialog": ["modal", "popup"]).
+  3. .ds-enforcer/catalog.json and tokens.css are generated: commit them, or add them to .gitignore and run `ds-enforcer sync` after a clone.
+  4. On an existing codebase, run `ds-enforcer check --baseline` once so only new findings count.
+     The server resyncs on its own when a connected source changes.
+

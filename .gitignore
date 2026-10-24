@@ -1,0 +1,5 @@
+node_modules/
+.DS_Store
+# Generated per project by `ds-enforcer init`; the test fixtures regenerate theirs
+tests/fixtures/**/.ds-enforcer/
+tests/fixtures/**/enforcer.config.json

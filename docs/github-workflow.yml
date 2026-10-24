@@ -1,0 +1,14 @@
+# .github/workflows/design-system.yml
+# Annotates design-system findings on each pull request's changed files.
+name: Design system
+on: pull_request
+jobs:
+  enforce:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the base commit is needed to see what changed
+      - uses: bbulman/design-system-enforcer@v1
+        with:
+          fail-on: high
