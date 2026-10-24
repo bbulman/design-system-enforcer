@@ -24,7 +24,7 @@ const VALUED = new Set(['--min', '--fail-on', '--root', '--format', '--since']);
 const option = (argv, name, fallback) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : fallback; };
 
 /** Load the engine for the project, regenerating an init-connected catalog first. */
-export async function loadEngine() {
+export async function loadEngine({ a11y = false } = {}) {
   const cfg = await import('./config.js');
   if (!cfg.connected) return null;
   if (cfg.config.sources?.length) {
@@ -42,7 +42,7 @@ export async function loadEngine() {
   const { relOf } = await import('./baseline.js');
   const drift = driftFindings(tokens.data?.catalog);
   const { reviewA11y } = await import('./a11y.js');
-  const a11yOn = cfg.config.a11y === true || process.argv.includes('--a11y');
+  const a11yOn = a11y || cfg.config.a11y === true || process.argv.includes('--a11y');
   // A token file's drift findings join its own (it is otherwise exempt from the checks).
   return { ...cfg, validate: (content, file) => [
     ...validateFile(content, file, tokens, registry, native),

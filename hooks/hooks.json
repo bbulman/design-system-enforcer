@@ -7,6 +7,13 @@
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/ds-enforcer.mjs\" hook", "timeout": 30 }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/ds-enforcer.mjs\" stop-hook", "timeout": 60 }
+        ]
+      }
     ]
   }
 }

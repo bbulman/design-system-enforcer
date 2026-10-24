@@ -13,6 +13,9 @@ inputs:
   working-directory:
     description: The project folder (where enforcer.config.json lives).
     default: .
+  summary:
+    description: Add the checklist report for the changed files to the job summary when anything is found (true or false).
+    default: 'true'
 runs:
   using: composite
   steps:
@@ -20,6 +23,7 @@ runs:
       with:
         node-version: 22
     - name: Check changed files
+      id: check
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -32,3 +36,22 @@ runs:
         # shellcheck disable=SC2206
         paths=($DS_PATHS)
         node "$GITHUB_ACTION_PATH/bin/ds-enforcer.mjs" "${args[@]}" "${paths[@]}"
+    - name: Checklist report in the job summary
+      if: always() && inputs.summary == 'true' && steps.check.outcome != 'skipped'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        DS_BASE: ${{ github.event.pull_request.base.sha }}
+        DS_PATHS: ${{ inputs.paths }}
+      run: |
+        out=.ds-enforcer/pr-report.md
+        if [ -n "$DS_BASE" ]; then
+          mapfile -t files < <(git diff --name-only --diff-filter=d "$DS_BASE" HEAD -- . 2>/dev/null | sed "s|^$(git rev-parse --show-prefix)||")
+          [ ${#files[@]} -eq 0 ] && exit 0
+        else
+          # shellcheck disable=SC2206
+          files=($DS_PATHS)
+        fi
+        node "$GITHUB_ACTION_PATH/bin/ds-enforcer.mjs" report --out "$out" "${files[@]}" > /dev/null || exit 0
+        if grep -q '^- \[ \]' "$out"; then cat "$out" >> "$GITHUB_STEP_SUMMARY"; fi
+        rm -f "$out"

@@ -85,11 +85,11 @@ Run `ds-enforcer check --baseline` once. From then on `check`, the edit hook and
 
 ## Checking every edit Claude makes
 
-Say yes to the hook in `init` (or run it again later), and after Claude edits or writes a file the enforcer checks it. New findings at or above `medium` go straight back to Claude, which fixes them in its next step; anything else stays silent. It takes about 0.1 s per edit and never blocks work it can't judge (an unconnected project, a file type it doesn't check, a file outside the project).
+Say yes to the hooks in `init` (or run it again later), and after Claude edits or writes a file the enforcer checks it. New findings at or above `medium` go straight back to Claude, which fixes them in its next step; anything else stays silent. It takes about 0.1 s per edit and never blocks work it can't judge (an unconnected project, a file type it doesn't check, a file outside the project).
 
-`init` adds the hook to `.claude/settings.local.json`, your personal settings, because the command holds this machine's path to the enforcer. It takes effect once Claude Code restarts. Set `hookMin` to `high` or `low` to change what it reports.
+`init` adds two hooks to `.claude/settings.local.json`: the edit hook, and a Stop hook that shows [the checklist report](#the-checklist-report) when Claude finishes. They go in your personal settings, because the command holds this machine's path to the enforcer. They take effect once Claude Code restarts. Set `hookMin` to `high` or `low` to change what it reports.
 
-**As a plugin:** the repository is also a Claude Code plugin. `.claude-plugin/plugin.json` registers the MCP server and `hooks/hooks.json` registers the edit hook, both through `${CLAUDE_PLUGIN_ROOT}`, so nothing machine-specific is written into your project.
+**As a plugin:** the repository is also a Claude Code plugin. `.claude-plugin/plugin.json` registers the MCP server and `hooks/hooks.json` registers both hooks, all through `${CLAUDE_PLUGIN_ROOT}`, so nothing machine-specific is written into your project.
 
 ## Pull requests
 
@@ -112,6 +112,21 @@ jobs:
 ```
 
 `--format sarif` writes SARIF 2.1.0 for GitHub code scanning and other tools.
+
+## The checklist report
+
+`ds-enforcer report` (or ask Claude to "make a design system report") writes `design-system-report.md`: every finding as a checkbox, grouped by file, each marked **auto** (a swap with exactly one right answer) or **Claude** (needs judgment).
+
+```markdown
+## src/app/page.tsx (3)
+
+- [ ] **R1** · line 6 · high · Arbitrary colour bg-[#7C3AED] → `bg-[#7C3AED]` → `bg-brand` · *auto*
+- [ ] **R2** · line 9 · medium · Raw <button> → Use <Button> from @/components/ui/button · *Claude*
+```
+
+Tick the boxes you want (in the file, or from chat: "tick R2 and all auto"), then run `ds-enforcer apply` or ask Claude to "apply the design system report". The enforcer makes the auto swaps itself, hands the Claude items to Claude, re-checks every file and marks each box ✅ fixed, 🛠 for Claude or ⚠️ still there. Run `apply` again after Claude's edits to verify them. Unticked items are left alone; `apply --accept-rest` records them in the baseline so they stop coming back.
+
+**It shows up by itself.** With the hooks on (`init` asks), when Claude finishes a reply in which it edited files, the report is refreshed for those files and, if anything is left to fix, a short summary appears in Claude Code with the first items and the file to open. It stays quiet when nothing is left or nothing changed since it last spoke, and keeps boxes you already ticked. Set `"openReport": true` to also open the file in your default app, `"reportMin": "medium"` to list less, or `"autoReport": false` to turn it off. In pull requests, the Action adds the same checklist for the changed files to the job summary.
 
 ## Figma
 
@@ -144,6 +159,8 @@ It can't see the rendered page: focus order and visibility, target size, zoom an
 | `fix_file` | Applies the unambiguous swaps (a colour, spacing or radius value that exactly matches one token). Has a dry run. Never edits Swift |
 | `a11y_review` | The accessibility review of a file or snippet, or the design system's colour pairs |
 | `native_apps` | For projects with SwiftUI apps: each app's theme files, build commands and current drift |
+| `report` | Writes the [checklist report](#the-checklist-report) for a file, folder or the whole project |
+| `apply_report` | Ticks items (ids, `auto` or `all`), makes the auto fixes, re-checks and marks each box; returns what is left for Claude |
 
 ## Command line
 
@@ -153,7 +170,10 @@ ds-enforcer sync  [--root <dir>]
 ds-enforcer check [paths...] [--baseline] [--all] [--a11y] [--since <ref>]
                   [--format text|json|github|sarif] [--min low|medium|high]
                   [--fail-on low|medium|high|never] [--root <dir>]
-ds-enforcer hook  # the Claude Code edit hook (reads the hook's JSON on stdin)
+ds-enforcer report [paths...] [--out <file>] [--min low|medium|high] [--a11y]
+ds-enforcer apply  [--report <file>] [--tick R1,R4|auto|all] [--accept-rest]
+ds-enforcer hook       # the Claude Code edit hook (reads the hook's JSON on stdin)
+ds-enforcer stop-hook  # the Claude Code Stop hook that shows the report
 ds-enforcer       # starts the MCP server (what Claude Code runs)
 ```
 
@@ -180,6 +200,9 @@ files=$(git diff --cached --name-only --diff-filter=ACM -- '*.css' '*.js' '*.jsx
 | `rules.pureBlack`, `rules.pureWhite` | off | `{ "enabled", "severity", "message", "suggestion" }` |
 | `a11y` | `false` | Make the accessibility review part of every `check` and the hook |
 | `hookMin` | `medium` | The lowest severity the edit hook reports |
+| `autoReport` | `true` | Show the checklist report when Claude finishes, if the Stop hook is on |
+| `reportMin` | `low` | The lowest severity that report lists |
+| `openReport` | `false` | Also open the report file in your default app |
 | `baseline` | `.ds-enforcer/baseline.json` | Where the baseline lives |
 | `exemptFiles` | your token files | File names never checked |
 | `exemptDirs` | `node_modules`, `vendor`, `.git`, `.ds-enforcer` | Paths never checked |

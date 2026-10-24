@@ -66,6 +66,11 @@ export function distance(a, b) {
   return Math.hypot(L1 - L2, a1 - a2, b1 - b2) * 100;
 }
 
+function weightedDistance(a, b) {
+  const [L1, a1, b1] = toOklab(a), [L2, a2, b2] = toOklab(b);
+  return Math.hypot(L1 - L2, 2 * (a1 - a2), 2 * (b1 - b2)) * 100;
+}
+
 export function closeness(d) {
   return d < 2 ? 'practically identical' : d < 5 ? 'very close' : d < 10 ? 'close' : 'the nearest, but clearly different';
 }
@@ -78,12 +83,14 @@ export function closeness(d) {
 export function nearestColorToken(tokenParser, value) {
   const target = parseColor(value);
   if (!target || !tokenParser?.colorToToken?.size) return null;
+  // Choose with colourfulness weighted double, so a grey is matched to a neutral rather than a
+  // saturated colour of similar lightness; report the plain perceptual distance.
   let best = null;
   for (const [hex, names] of tokenParser.colorToToken) {
     const c = parseColor(hex);
     if (!c) continue;
-    const d = distance(target, c);
-    if (!best || d < best.distance) best = { hex: toHex(c), distance: d, names };
+    const w = weightedDistance(target, c);
+    if (!best || w < best.weighted) best = { hex: toHex(c), weighted: w, distance: distance(target, c), names };
   }
   if (!best) return null;
   return { name: tokenParser.pickBestColorToken(best.names), names: best.names, hex: best.hex, distance: best.distance };

@@ -1,6 +1,6 @@
 {
   "name": "design-system-enforcer",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Keeps AI coding agents inside your design system: an MCP server and CLI that reads your tokens and components, tells the agent what exists, and checks what it wrote (Tailwind, React, Vue, Svelte, CSS, SwiftUI, Figma variables, accessibility).",
   "type": "module",
   "main": "index.js",

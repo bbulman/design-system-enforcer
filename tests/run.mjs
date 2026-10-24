@@ -8,7 +8,7 @@
  *   npm test
  */
 import { spawnSync, spawn } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync, readFileSync, appendFileSync, existsSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync, readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -96,6 +96,60 @@ test('check: GitHub annotation format', () => {
   ok(/^::error file=src\/app\/page\.tsx,line=\d+,title=Design system \(high\)::/m.test(r.out), 'no ::error annotation');
 });
 
+// ─── The checklist report ───
+const rep = project('react-tailwind');
+run(rep, ['init', '--yes']);
+test('report: writes a checklist with auto and Claude items', () => {
+  const r = run(rep, ['report', 'src']);
+  ok(r.code === 0 && /\d+ findings in \d+ files/.test(r.out), r.out + r.err);
+  const md = readFileSync(join(rep, 'design-system-report.md'), 'utf8');
+  ok(/- \[ \] \*\*R\d+\*\* .*bg-\[#7C3AED\]` → `bg-brand` · \*auto\*/.test(md), 'no auto item for bg-[#7C3AED] -> bg-brand');
+  ok(/\*Claude\*/.test(md), 'no Claude item');
+});
+test('report: apply fixes ticked auto items, marks them, leaves the rest', () => {
+  const md = readFileSync(join(rep, 'design-system-report.md'), 'utf8');
+  const id = md.match(/\*\*(R\d+)\*\* · line 6 · high · Arbitrary colour bg-\[#7C3AED\]/)[1];
+  const before = readFileSync(join(rep, 'src/app/page.tsx'), 'utf8');
+  run(rep, ['apply', '--tick', id]);
+  const after = readFileSync(join(rep, 'src/app/page.tsx'), 'utf8');
+  ok(after.includes('hover:bg-brand') && !after.includes('bg-[#7C3AED]'), 'the swap was not made');
+  ok(after.replace('hover:bg-brand', 'hover:bg-[#7C3AED]') === before, 'apply changed more than the one class');
+  ok(new RegExp(`\\*\\*${id}\\*\\*.*— ✅ fixed`).test(readFileSync(join(rep, 'design-system-report.md'), 'utf8')), 'item not marked fixed');
+});
+test('report: a Claude item is handed back, then verified once fixed', () => {
+  const md = readFileSync(join(rep, 'design-system-report.md'), 'utf8');
+  const [first, second] = [...md.matchAll(/\*\*(R\d+)\*\* · line (9|10) · medium · Raw <button>/g)].map(m => m[1]);
+  const r1 = run(rep, ['apply', '--tick', first]);
+  ok(r1.out.includes(`🛠 ${first}`), `not handed to Claude: ${r1.out}`);
+  const file = join(rep, 'src/app/a11y.tsx');
+  const src = readFileSync(file, 'utf8').split('\n');
+  src[8] = src[8].replace('<button onClick={close}>', '<Button onClick={close} aria-label="Close">').replace('</button>', '</Button>');
+  writeFileSync(file, src.join('\n'));
+  run(rep, ['apply']);
+  const after = readFileSync(join(rep, 'design-system-report.md'), 'utf8');
+  ok(new RegExp(`\\*\\*${first}\\*\\*.*— ✅ fixed`).test(after), 'fixed Claude item not marked');
+  ok(!new RegExp(`\\*\\*${second}\\*\\*.*— ✅ fixed`).test(after), 'an untouched identical neighbour was marked fixed');
+});
+test('report: --accept-rest moves unticked items into the baseline', () => {
+  const r = run(rep, ['apply', '--accept-rest']);
+  ok(/unticked items? recorded in the baseline/.test(r.out), r.out);
+  ok(run(rep, ['check', 'src']).code === 0, 'check still fails after accepting the rest');
+});
+
+test('stop hook: shows the report for this session\'s edits, then stays quiet until it changes', () => {
+  appendFileSync(join(rep, 'src/app/page.tsx'), '\nexport const Late = () => <p className="text-[#123456] m-[7px]">late</p>;\n');
+  const hookIn = (extra) => JSON.stringify({ session_id: 'sess-1', cwd: rep, ...extra });
+  const edit = spawnSync(process.execPath, [BIN, 'hook'], { cwd: rep, env, input: hookIn({ tool_input: { file_path: 'src/app/page.tsx' } }), encoding: 'utf8' });
+  ok(edit.status === 2, `edit hook exit ${edit.status}`);
+  const stop = () => spawnSync(process.execPath, [BIN, 'stop-hook'], { cwd: rep, env, input: hookIn({}), encoding: 'utf8' });
+  const first = stop();
+  ok(first.status === 0 && /Design system report: \d+ violation/.test(JSON.parse(first.stdout).systemMessage), `first: ${first.stdout}${first.stderr}`);
+  ok(existsSync(join(rep, 'design-system-report.md')), 'report not written');
+  ok(stop().stdout.trim() === '', 'repeated the same report');
+  const other = spawnSync(process.execPath, [BIN, 'stop-hook'], { cwd: rep, env, input: JSON.stringify({ session_id: 'sess-2', cwd: rep }), encoding: 'utf8' });
+  ok(other.stdout.trim() === '', 'spoke for another session');
+});
+
 // ─── Vue ───
 const vue = project('vue');
 run(vue, ['init', '--yes']);
@@ -142,7 +196,7 @@ async function mcp() {
   await call('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
   p.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   const tools = (await call('tools/list', {})).result.tools.map(t => t.name);
-  test('mcp: all ten tools are listed', () => ok(['init', 'suggest_component', 'list_components', 'list_tokens', 'validate_file', 'check_snippet', 'audit_page', 'fix_file', 'a11y_review', 'native_apps'].every(t => tools.includes(t)), `tools: ${tools.join(', ')}`));
+  test('mcp: all twelve tools are listed', () => ok(['init', 'suggest_component', 'list_components', 'list_tokens', 'validate_file', 'check_snippet', 'audit_page', 'fix_file', 'a11y_review', 'native_apps', 'report', 'apply_report'].every(t => tools.includes(t)), `tools: ${tools.join(', ')}`));
   const outside = await call('tools/call', { name: 'fix_file', arguments: { file_path: '/etc/hosts', dry_run: true } });
   test('mcp: file tools refuse paths outside the project', () => ok(outside.result.isError && /outside the project/.test(outside.result.content[0].text), outside.result.content[0].text));
   const pairs = await call('tools/call', { name: 'a11y_review', arguments: { tokens: true } });

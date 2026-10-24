@@ -5,6 +5,9 @@
  * ds-enforcer sync       regenerate .ds-enforcer/ from the connected sources
  * ds-enforcer check      run the checks from the command line (pre-commit, CI)
  * ds-enforcer hook       Claude Code PostToolUse hook: check the file Claude just edited
+ * ds-enforcer stop-hook  Claude Code Stop hook: refresh the report for this session's edits and show it
+ * ds-enforcer report     write the violations as a checklist (design-system-report.md)
+ * ds-enforcer apply      fix the ticked items in the checklist, re-check, mark them done
  */
 const [cmd, ...rest] = process.argv.slice(2);
 if (!cmd || cmd === 'serve') {
@@ -12,13 +15,19 @@ if (!cmd || cmd === 'serve') {
 } else if (cmd === 'init' || cmd === 'sync') {
   const cli = await import('../init/cli.mjs');
   process.exitCode = await (cmd === 'init' ? cli.runInit(rest) : cli.runSync(rest));
+} else if (cmd === 'report' || cmd === 'apply') {
+  const { runReportCli } = await import('../report-cli.mjs');
+  process.exitCode = await runReportCli(cmd, rest);
 } else if (cmd === 'hook') {
   const { runHook } = await import('../hook.mjs');
   process.exitCode = await runHook();
+} else if (cmd === 'stop-hook') {
+  const { runStopHook } = await import('../hook.mjs');
+  process.exitCode = await runStopHook();
 } else if (cmd === 'check') {
   const { runCheck } = await import('../check.mjs');
   process.exitCode = await runCheck(rest);
 } else {
-  console.log('Usage: ds-enforcer [serve] | init [--root <dir>] [--yes] | sync [--root <dir>] | check [paths...] [--baseline] [--all] [--a11y] [--since <ref>] [--format text|json|github|sarif] [--min low|medium|high] [--fail-on low|medium|high|never] [--root <dir>]');
+  console.log('Usage: ds-enforcer [serve] | init [--root <dir>] [--yes] | sync [--root <dir>] | check [paths...] [--baseline] [--all] [--a11y] [--since <ref>] [--format text|json|github|sarif] [--min low|medium|high] [--fail-on low|medium|high|never] [--root <dir>] | report [paths...] [--out <file>] [--min <sev>] [--a11y] | apply [--report <file>] [--tick R1,R4|auto|all] [--accept-rest]');
   process.exitCode = cmd === 'help' || cmd === '--help' ? 0 : 1;
 }

@@ -111,7 +111,7 @@ export async function runInit(argv = []) {
       pureWhite: yesNo(await ask('Flag pure white backgrounds as a house rule? (y/N): ', 'n')),
     };
 
-    const hook = yesNo(await ask('Check each file automatically after Claude edits it (a Claude Code hook)? (y/N): ', 'n'));
+    const hook = yesNo(await ask('Check each file after Claude edits it, and show the report when it finishes if anything is left (Claude Code hooks)? (y/N): ', 'n'));
 
     const cfgPath = join(root, 'enforcer.config.json');
     let replace = false;
@@ -123,7 +123,7 @@ export async function runInit(argv = []) {
     say('\nAbout to connect:');
     for (const s of chosen) say(`  ${KIND[s.type]}: ${s.path}`);
     say(`  1rem = ${rootPx}px; house rules: ${[rules.pureBlack && 'no pure black', rules.pureWhite && 'no pure white backgrounds'].filter(Boolean).join(', ') || 'none'}`);
-    if (hook) say('  Claude Code hook: check each file after Claude edits it');
+    if (hook) say('  Claude Code hooks: check each file after Claude edits it; show the report when Claude finishes');
     if (!yesNo((await ask('Write enforcer.config.json and .ds-enforcer/? (Y/n): ', 'y')) || 'y')) { say('Nothing was written.'); return 1; }
 
     const r = connect(root, { sources: chosen, rootPx, rules, replace });
@@ -136,7 +136,7 @@ export async function runInit(argv = []) {
     if (r.onlyInFigma) say(`  ${r.onlyInFigma} Figma variable${r.onlyInFigma === 1 ? ' has' : 's have'} no matching code token`);
     if (hook) {
       const h = installHook(root);
-      say(h.installed ? `  Hook added to ${relative(root, h.path)}: Claude is told about new findings after each edit` : `  Hook not added: ${h.reason}`);
+      say(h.installed ? `  Hooks added to ${relative(root, h.path)}: Claude is told about new findings after each edit, and you see the report when it finishes` : `  Hooks not added: ${h.reason}`);
     }
     if (r.skipped.length) say(`  ${r.skipped.length} composite tokens skipped (typography sets have no single CSS value)`);
     say('\nNext:');

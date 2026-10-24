@@ -58,6 +58,12 @@ function pickForPrefix(prefix, names, tokenParser) {
   return [...names].sort((a, b) => score(a) - score(b) || a.localeCompare(b))[0];
 }
 
+/** The system class for exactly this colour (bg-brand), or null when no token holds it. */
+function exactClass(prefix, value, tokenParser) {
+  const exact = pickForPrefix(prefix, tokenParser.findColorToken(value), tokenParser);
+  return exact ? classFor(prefix, exact) : null;
+}
+
 function colourAdvice(prefix, value, tokenParser) {
   const exact = pickForPrefix(prefix, tokenParser.findColorToken(value), tokenParser);
   if (exact) return `Use ${classFor(prefix, exact)} (${exact})`;
@@ -83,11 +89,12 @@ export function checkTailwind(lines, filePath, tokenParser, skip = new Set()) {
   const out = [];
   const seen = new Set();
   // One finding per class per line: hover:bg-zinc-700 and focus:bg-zinc-700 are the same problem.
-  const push = (line, type, severity, match, message, suggestion) => {
+  // A fix ({ from, to }) is attached only when the swap has exactly one right answer.
+  const push = (line, type, severity, match, message, suggestion, to = null) => {
     const key = `${line}|${type}|${match}`;
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ type, severity, line, match, message, suggestion, autoFixable: false, file: filePath });
+    out.push({ type, severity, line, match, message, suggestion, autoFixable: Boolean(to), ...(to ? { fix: { from: match, to } } : {}), file: filePath });
   };
 
   const arbitraryColour = new RegExp(`${BOUNDARY}(${COLOR_PREFIX})-\\[(#[0-9a-fA-F]{3,8}|rgba?\\([^\\]]*\\)|hsla?\\([^\\]]*\\))\\]`, 'g');
@@ -106,14 +113,14 @@ export function checkTailwind(lines, filePath, tokenParser, skip = new Set()) {
       const colour = parseColor(value);
       if (pureBlack.enabled && colour && colour.r + colour.g + colour.b === 0) push(lineNum, 'design-rule', pureBlack.severity, m[0], pureBlack.message, pureBlack.suggestion);
       if (pureWhite.enabled && m[1] === 'bg' && colour && colour.r + colour.g + colour.b === 765) push(lineNum, 'design-rule', pureWhite.severity, m[0], pureWhite.message, pureWhite.suggestion);
-      push(lineNum, 'tailwind-arbitrary-color', 'high', m[0], `Arbitrary colour ${m[0]}`, colourAdvice(m[1], value, tokenParser));
+      push(lineNum, 'tailwind-arbitrary-color', 'high', m[0], `Arbitrary colour ${m[0]}`, colourAdvice(m[1], value, tokenParser), exactClass(m[1], value, tokenParser));
     }
 
     for (const [re, kind] of [[arbitrarySpace, 'spacing'], [arbitraryRadius, 'radius'], [arbitraryText, 'font size']]) {
       for (const m of code.matchAll(re)) {
         const px = m[3] === 'rem' ? parseFloat(m[2]) * rootPx : parseFloat(m[2]);
         if (kind === 'spacing' && Math.abs(px) <= 1) continue;
-        let suggestion;
+        let suggestion, to = null;
         if (kind === 'spacing') {
           const token = Number.isInteger(px) ? tokenParser.findSpacingToken(Math.abs(px)) : null;
           const step = Math.abs(px) / 4;
@@ -125,15 +132,20 @@ export function checkTailwind(lines, filePath, tokenParser, skip = new Set()) {
             : token ? `Use ${m[1]}-[var(${token})] (${token} is ${Math.abs(px)}px)`
             : onScale ? `Use ${m[1]}-${step} (${Math.abs(px)}px on the spacing scale)`
             : `Use the nearest step on the spacing scale: ${m[1]}-${nearest} (${nearest * 4}px)`;
+          // Exact equivalents only; rounding to the nearest step changes the layout, so that's a judgment call.
+          to = token && version === 'v4' && token.startsWith('--spacing-') ? `${m[1]}-${token.slice('--spacing-'.length)}`
+            : token ? `${m[1]}-[var(${token})]`
+            : onScale && px >= 0 ? `${m[1]}-${step}` : null;
         } else if (kind === 'radius') {
           const token = Number.isInteger(px) ? tokenParser.findRadiusToken(px) : null;
           suggestion = !token ? 'Use a rounded-* step from the design system'
             : version === 'v4' && token.startsWith('--radius-') ? `Use ${m[1]}-${token.slice('--radius-'.length)} (${token} is ${px}px)`
             : `Use rounded-[var(${token})] (${token} is ${px}px), or the rounded-* step mapped to it`;
+          to = !token ? null : version === 'v4' && token.startsWith('--radius-') ? `${m[1]}-${token.slice('--radius-'.length)}` : `${m[1]}-[var(${token})]`;
         } else {
           suggestion = 'Use a text-* size from the type scale (text-sm is 14px, text-base 16px)';
         }
-        push(lineNum, `tailwind-arbitrary-${kind.replace(' ', '-')}`, kind === 'font size' ? 'low' : 'medium', m[0], `Arbitrary ${kind} ${m[0]}`, suggestion);
+        push(lineNum, `tailwind-arbitrary-${kind.replace(' ', '-')}`, kind === 'font size' ? 'low' : 'medium', m[0], `Arbitrary ${kind} ${m[0]}`, suggestion, to);
       }
     }
 
@@ -148,7 +160,8 @@ export function checkTailwind(lines, filePath, tokenParser, skip = new Set()) {
           continue; // the house rule already says it; one finding per class
         }
         push(lineNum, 'tailwind-default-palette', name === 'black' || name === 'white' ? 'low' : 'medium', whole,
-          `Tailwind's default ${name} (${hex}) is not one of the design system's colours`, colourAdvice(prefix, hex, tokenParser));
+          `Tailwind's default ${name} (${hex}) is not one of the design system's colours`, colourAdvice(prefix, hex, tokenParser),
+          m[3] ? null : exactClass(prefix, hex, tokenParser)); // an opacity modifier (/50) needs a person
       }
     }
   });

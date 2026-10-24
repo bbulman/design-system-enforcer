@@ -41,6 +41,7 @@ import { loadSearch } from './catalog-search.js';
 import { loadBaseline, splitByBaseline, relOf } from './baseline.js';
 import { driftFindings } from './drift.js';
 import { reviewA11y, tokenPairs } from './a11y.js';
+import { writeReport, applyReport, DEFAULT_REPORT } from './report.mjs';
 import { detect } from './init/detect.mjs';
 import { countFigma, folderFramework } from './init/importers.mjs';
 import { connect, generate, sourceStamp, installHook } from './init/build.mjs';
@@ -164,7 +165,7 @@ const INSTRUCTIONS = !connected ? UNCONNECTED_INSTRUCTIONS
 
 // Create MCP server
 const server = new Server(
-  { name: config.name ? `${config.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-design-system-enforcer` : 'design-system-enforcer', version: '1.2.0' },
+  { name: config.name ? `${config.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-design-system-enforcer` : 'design-system-enforcer', version: '1.3.0' },
   { capabilities: { tools: {} }, instructions: INSTRUCTIONS }
 );
 
@@ -342,6 +343,33 @@ const TOOLS = [
     },
   },
   {
+    name: 'report',
+    description:
+      'Write the design system violations as a checklist: design-system-report.md at the project root, one checkbox per new finding, each marked auto (a swap with one right answer, which the enforcer applies) or Claude (needs judgment). Use when the user wants a report, a to-do list or a review of what to fix. Tell them where it is, how many items are auto, and that they can tick boxes in the file or tell you which to fix (by id, "all auto" or "all"). Then call apply_report.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paths: { type: 'array', items: { type: 'string' }, description: 'Folders or files to cover (project-relative). Default: the whole project' },
+        min: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Lowest severity to list (default low)' },
+        a11y: { type: 'boolean', description: 'Include the accessibility review' },
+        out: { type: 'string', description: `Report path (default ${DEFAULT_REPORT})` },
+      },
+    },
+  },
+  {
+    name: 'apply_report',
+    description:
+      'Work through the checklist: ticks the items in select (ids like "R4", "auto" or "all") on top of the boxes the user ticked, applies the auto fixes, re-checks the files and marks fixed items done. Ticked Claude items come back as a list: make each change in the file (following its suggestion), then call apply_report again so the enforcer verifies and marks them. With accept_rest, unticked items go into the baseline.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        select: { type: 'array', items: { type: 'string' }, description: 'Items to tick before applying: ids ("R1"), "auto" or "all"' },
+        accept_rest: { type: 'boolean', description: 'Record the unticked items in the baseline so they stop coming back. Only with the user\'s say-so' },
+        report: { type: 'string', description: `Report path (default ${DEFAULT_REPORT})` },
+      },
+    },
+  },
+  {
     name: 'native_apps',
     description:
       'The native apps in the design-system manifest (design-system/workshopr-design-system.json, native.apps). With no app: one line per app. With an app key: its full binding (source, theme files, token namespace, annotation style, how project files are added), build, run and screenshot commands, hazards, sanctioned scopes, and a live count of the native check\'s findings by rule with the drifted constants named. Call it before writing Swift.',
@@ -394,6 +422,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return handleNativeApps(args);
       case 'a11y_review':
         return handleA11y(args);
+      case 'report':
+        return await handleReport(args);
+      case 'apply_report':
+        return await handleApplyReport(args);
       default:
         return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
     }
@@ -900,6 +932,30 @@ function handleNativeApps({ app } = {}) {
   const drifted = findings.filter(f => f.rule === 'native-token-drift');
   if (drifted.length) text += `\nDrifted constants:\n${drifted.map(f => `- ${f.message} (${f.file}:${f.line})`).join('\n')}\n`;
   text += nativeCtx.manifest.check || config.framework === 'php' ? `\nEvery finding: ${nativeCtx.manifest.check || 'npm run lint:ds:native'} -- --app ${app} --all\n` : `\nEvery finding: ds-enforcer check ${a.source || a.root} --all\n`;
+  return { content: [{ type: 'text', text }] };
+}
+
+// ─── The checklist report ───
+
+async function handleReport({ paths = [], min, a11y, out } = {}) {
+  for (const p of paths) resolvePath(p); // refuses paths outside the project
+  const r = await writeReport({ targets: paths, base: PROJECT_ROOT, min, a11y, out });
+  const text = r.total
+    ? `Wrote \`${r.rel}\`: ${r.total} finding${r.total === 1 ? '' : 's'} in ${r.files} file${r.files === 1 ? '' : 's'}. ${r.auto} are **auto** (the enforcer makes the swap itself); ${r.total - r.auto} are for **Claude** (they need judgment, and the enforcer checks the result).\n\nThe user can tick boxes in the file, or tell you which to fix: ids like R1 and R4, "all auto", or "all". Then call apply_report with those in select.`
+    : `Wrote \`${r.rel}\`: nothing to fix.`;
+  return { content: [{ type: 'text', text }] };
+}
+
+async function handleApplyReport({ select = [], accept_rest = false, report } = {}) {
+  const r = await applyReport({ report, select, acceptRest: accept_rest });
+  let text = `## Applied \`${r.report}\`\n\n- **Fixed**: ${r.fixed} (${r.appliedAuto} applied by the enforcer)\n`;
+  if (r.stillThere.length) text += `- **Still there**: ${r.stillThere.map(s => `${s.id} (${s.file}:${s.line}, ${s.why})`).join('; ')}\n`;
+  if (r.accepted) text += `- **Accepted into the baseline**: ${r.accepted}\n`;
+  if (r.unticked > 0) text += `- **Not ticked**: ${r.unticked}\n`;
+  if (r.forClaude.length) {
+    text += `\n### For you to fix (${r.forClaude.length})\n\nMake each change, then call apply_report again to verify and mark it.\n\n`;
+    for (const c of r.forClaude) text += `- **${c.id}** \`${c.file}:${c.line}\`: ${c.message}${c.match ? ` (\`${c.match}\`)` : ''}. ${c.suggestion || ''}\n`;
+  } else text += `\nEvery ticked item is done or reported above. The report is updated.\n`;
   return { content: [{ type: 'text', text }] };
 }
 
