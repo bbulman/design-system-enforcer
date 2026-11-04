@@ -1,6 +1,6 @@
 {
   "name": "design-system-enforcer",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Keeps Claude inside your design system: tells it which tokens and components exist before it writes UI, and checks every file it edits.",
   "author": {
     "name": "Bill Bulman",
@@ -13,7 +13,7 @@
     "design-system-enforcer": {
       "command": "node",
       "args": [
-        "${CLAUDE_PLUGIN_ROOT}/index.js"
+        "${CLAUDE_PLUGIN_ROOT}/bin/ds-enforcer.mjs"
       ]
     }
   }

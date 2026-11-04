@@ -5,11 +5,14 @@
  * a ratchet: a file with three baselined #fff colours may keep three, not four.
  *
  *   ds-enforcer check --baseline   records today's findings (re-run to lock in fixes)
+ *   ds-enforcer check --baseline --only <type,...>
+ *                                  re-records only those rules' findings, keeping the rest
  *   ds-enforcer check              reports only findings beyond the baseline
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { dirname, relative, sep } from 'path';
+import { readFileSync, existsSync } from 'fs';
+import { relative, sep } from 'path';
 import { config, PROJECT_ROOT, projectPath } from './config.js';
+import { writeJsonAtomic } from './gate/settings.mjs';
 
 export const baselinePath = () => projectPath(config.baseline || '.ds-enforcer/baseline.json');
 
@@ -63,18 +66,58 @@ export function writeBaseline(results, files) {
   const scanned = new Set(files);
   const counts = {};
   for (const [key, n] of Object.entries(previous?.counts || {})) if (!scanned.has(key.split('|')[0])) counts[key] = n;
+  addCounts(counts, results);
+  return saveBaseline(counts);
+}
+
+/**
+ * Re-record only the findings of `types` in `files`, keeping every other entry,
+ * so a new rule's existing debt can be baselined without re-recording the rest.
+ */
+export function mergeBaseline(results, files, types) {
+  const scanned = new Set(files);
+  const only = new Set(types);
+  const counts = {};
+  for (const [key, n] of Object.entries(loadBaseline()?.counts || {})) {
+    const [file, type] = key.split('|');
+    if (!(scanned.has(file) && only.has(type))) counts[key] = n;
+  }
+  addCounts(counts, results.map(r => ({ ...r, violations: r.violations.filter(v => only.has(v.type)) })));
+  return saveBaseline(counts);
+}
+
+/**
+ * Add one count per finding, keeping every other entry: the reviewer's keep decisions on the review
+ * page, one finding at a time. How many were added.
+ */
+export function appendToBaseline(entries) {
+  const list = (Array.isArray(entries) ? entries : []).filter(e => typeof e?.file === 'string' && e.violation);
+  if (!list.length) return 0;
+  const current = loadBaseline();
+  // Writing over a file that exists but cannot be read would forget everything it held.
+  if (!current && existsSync(baselinePath())) throw new Error(`The baseline at ${relOf(baselinePath())} could not be read. Fix it, then try again.`);
+  const counts = { ...(current?.counts || {}) };
+  addCounts(counts, list.map(({ file, violation }) => ({ file, violations: [violation] })));
+  saveBaseline(counts);
+  return list.length;
+}
+
+function addCounts(counts, results) {
   for (const { file, violations } of results) for (const v of violations) {
     const k = keyOf(file, v);
     counts[k] = (counts[k] || 0) + 1;
   }
+}
+
+function saveBaseline(counts) {
   const path = baselinePath();
-  mkdirSync(dirname(path), { recursive: true });
   const sorted = Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
-  writeFileSync(path, JSON.stringify({
+  const total = Object.values(sorted).reduce((a, b) => a + b, 0);
+  writeJsonAtomic(path, {
     _comment: 'Findings this project already had, so only new ones fail. Written by `ds-enforcer check --baseline`; re-run it to lock in fixes. Commit this file.',
     updatedAt: new Date().toISOString(),
-    total: Object.values(sorted).reduce((a, b) => a + b, 0),
+    total,
     counts: sorted,
-  }, null, 2) + '\n');
-  return { path, total: Object.values(sorted).reduce((a, b) => a + b, 0) };
+  });
+  return { path, total };
 }

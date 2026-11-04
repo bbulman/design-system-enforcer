@@ -1,22 +1,26 @@
 #!/usr/bin/env node
 /**
- * Workshopr Design System Enforcer — MCP Server
+ * Design System Enforcer — MCP Server
  *
- * Ensures all code follows the Workshopr design system:
+ * Holds a project's code to its own design system, as its enforcer.config.json describes it:
  * - Token usage (colors, spacing, typography, shadows, radii)
- * - Component usage (ws_* helpers instead of raw HTML)
- * - Design rules (no pure black, warm neutrals, etc.)
+ * - Component usage (the project's components instead of raw HTML)
+ * - House rules the project switches on (pure black, pure white)
  * - Native apps (Swift): values only in the theme files, mirroring the web tokens
  *
  * Tools:
  *   validate_file:     Scan a CSS, PHP, JS or Swift file for violations
  *   fix_file:          Auto-fix simple violations (color/spacing/radius swaps); never Swift
  *   audit_page:        Full compliance report for a file
- *   list_components:   List all ws_* components with signatures
+ *   list_components:   List all components with signatures
  *   list_tokens:       List design tokens by category or role, as CSS or as Swift
- *   suggest_component: Suggest which ws_* component to use
+ *   suggest_component: Suggest which component to use
  *   check_snippet:     Validate a code snippet inline (no file needed), Swift included
  *   native_apps:       The native apps' bindings, commands and live findings
+ *   consult_ui:        Component gate: the components that could build each UI piece of a file
+ *   record_case:       Component gate: put a kept or from-scratch piece in the reviewer's queue
+ *   scan_components:   Component gate: suggest new components from bespoke patterns that keep reappearing
+ *   apply_review:      Component gate: carry out the reviewer's decisions from the review page
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -30,13 +34,14 @@ import { resolve, relative, isAbsolute, sep } from 'path';
 import { TokenParser } from './token-parser.js';
 import { ComponentRegistry } from './component-registry.js';
 import { validateFile, validateCSS, validatePHP, validateJS, validateJSX, validateSFC, validateSwift } from './validators.js';
+import { findSmallIcons } from './icon-size.js';
 import { autoFix, previewFixes, generateReport } from './auto-fixer.js';
 import {
   loadNative, nativeSources, mirrorsOf, swiftValue, describeStops, nearestToken, runNativeCheck,
   readBaseline, compareToBaseline,
 } from './native.js';
 
-import { config, PROJECT_ROOT, PROJECT_DIR, CONFIG_PATH, connected, reloadConfig, projectPath, insideProject } from './config.js';
+import { config, PROJECT_ROOT, PROJECT_DIR, CONFIG_PATH, connected, reloadConfig, projectPath, insideProject, insideProjectReal, joinText, staleConfig, staleConfigText, tokenNamePatterns } from './config.js';
 import { loadSearch } from './catalog-search.js';
 import { loadBaseline, splitByBaseline, relOf } from './baseline.js';
 import { driftFindings } from './drift.js';
@@ -45,11 +50,20 @@ import { writeReport, applyReport, DEFAULT_REPORT } from './report.mjs';
 import { detect } from './init/detect.mjs';
 import { countFigma, folderFramework } from './init/importers.mjs';
 import { connect, generate, sourceStamp, installHook } from './init/build.mjs';
+import { gateSettings, projectCli, fileTypesText } from './gate/settings.mjs';
+import { consult, formatConsult } from './gate/consult.mjs';
+import { recordCase, recordedText, CaseInputError } from './gate/queue.mjs';
+import { scanSuggestions, refreshSuggestions, dismissedIds, formatSuggestions, SuggestInputError } from './gate/suggest.mjs';
+import { applyReview, formatApplyReview } from './gate/apply.mjs';
 
 // Initialize parsers. The server lives as long as the Claude Code session, and the
 // catalog is regenerated under it; without a reload it answered from the catalog
 // the session started with (a variant added since read as "not an option").
 const SOURCES = () => [config.catalog, config.synonyms, config.tokensCss].map(projectPath);
+/* "ws_* " where the project names its helper functions with a prefix (components.functionPrefix), else nothing. */
+const anyNamed = () => (config.components.functionPrefix ? `${config.components.functionPrefix}* ` : '');
+/* "a, b or c" */
+const orList = list => (list.length > 1 ? `${list.slice(0, -1).join(', ')} or ${list.at(-1)}` : list.join(''));
 let tokenParser = null;
 let componentRegistry = null;
 let loadError = null;
@@ -91,6 +105,8 @@ try { nativeCtx = connected && !loadError ? loadNative() : (() => { throw new Er
   console.error(`Native manifest not loaded, Swift checks are off until it parses: ${error.message}`);
   nativeCtx = { manifest: { apps: {} }, apps: {}, tokens: new Map(), hexTokens: new Map(), groups: new Map(), byHex: new Map(), missing: [] };
 }
+/* The native apps the check reads (an external one is only described). */
+const checkableApps = () => Object.entries(nativeCtx.apps).filter(([, a]) => !a.external).map(([k]) => k);
 const stampOf = paths => paths.map(p => { try { return statSync(p).mtimeMs; } catch { return 0; } }).join(':');
 const webStamp = () => stampOf(SOURCES());
 // The manifest names the theme files, so the watched list is read from the loaded context.
@@ -137,39 +153,50 @@ function ensureFresh() {
 }
 
 // Claude Code injects this into every session that has the server, so it stays short.
-// Workshopr's own text (framework "php") is kept word for word; init-connected projects get the generic one.
-const WORKSHOPR_INSTRUCTIONS = [
-  'Workshopr design system enforcer.',
-  'Before writing UI, find what exists. Web (PHP, CSS, JS): suggest_component names the ws_* helper and its options, list_tokens the token for a role.',
-  'Native (Swift): native_apps gives an app\'s theme files, build and screenshot commands; list_tokens with platform "swift" and app gives each token as Color(hex:) and the theme constant that already mirrors it. Swift values live only in the app\'s theme files.',
-  'After writing, check: validate_file on every changed .php, .css, .js or .swift file, or check_snippet with code and language (css, php, js or swift; for Swift pass file_path so it knows the app and whether the file is a theme file). npm run lint:ds:native checks every native app against its baseline.',
-  'No check sees accessible names, roles, focus order or target size (44pt): read the rendered accessibility tree. Of Dynamic Type, native-fixed-font catches fixed text sizes only.',
-  `The contract: ${config.docs.web || 'see the project docs'} (web)${config.docs.native ? ` and ${config.docs.native} (native)` : ''}.`,
-].join(' ');
-
-const GENERIC_INSTRUCTIONS = () => [
-  `${config.name ? `${config.name} d` : 'D'}esign system enforcer.`,
+// A project's own wording (text.instructions) takes the place of the generic body, word for word.
+const GENERIC_BODY = [
   'Before writing UI, find what exists: suggest_component names the component, its props and the only variant values that exist; list_tokens gives the token for a role ("danger text", "card padding").',
   'After writing, check: validate_file on every changed .css, .jsx, .tsx or .ts file, or check_snippet with code and language.',
   'No check sees accessible names, roles, focus order or target size: read the rendered accessibility tree.',
   'The design system is read from the sources in enforcer.config.json and resyncs when they change; init reconnects or adds sources.',
 ].join(' ');
 
+/* "The contract: <web> (web) and <native> (native)." with whichever of the two docs the config names. */
+const contractLine = ({ web, native } = {}) => {
+  const docs = [web && `${web} (web)`, native && `${native} (native)`].filter(Boolean);
+  return docs.length ? `The contract: ${docs.join(' and ')}.` : null;
+};
+
+const CONNECTED_INSTRUCTIONS = () => [
+  `${config.name ? `${config.name} d` : 'D'}esign system enforcer.`,
+  joinText(config.text.instructions) || GENERIC_BODY,
+  contractLine(config.docs),
+].filter(Boolean).join(' ');
+
 const UNCONNECTED_INSTRUCTIONS = [
   'Design system enforcer, not connected to this project yet.',
   'Call init (action "detect") to find the tokens and components the project already has, ask the user which to connect, then init with action "connect".',
 ].join(' ');
 
-const INSTRUCTIONS = !connected ? UNCONNECTED_INSTRUCTIONS
-  : config.framework === 'php' ? WORKSHOPR_INSTRUCTIONS : GENERIC_INSTRUCTIONS();
+const INSTRUCTIONS = !connected ? UNCONNECTED_INSTRUCTIONS : CONNECTED_INSTRUCTIONS();
+
+/* One version for the package, the plugin and the server: package.json's. */
+const VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
 
 // Create MCP server
 const server = new Server(
-  { name: config.name ? `${config.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-design-system-enforcer` : 'design-system-enforcer', version: '1.3.0' },
+  { name: config.name ? `${config.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-design-system-enforcer` : 'design-system-enforcer', version: VERSION },
   { capabilities: { tools: {} }, instructions: INSTRUCTIONS }
 );
 
 // ─── Tool Definitions ───
+
+/* Who decides the component gate's cases (componentGate.reviewer), as the tool texts name them. */
+const REVIEWER = gateSettings().reviewer;
+/* The gate's command line, from the project root (gate/settings.mjs projectCli). */
+const CLI = projectCli();
+/* The file types the gate holds to a consult, and those it only reports (componentGate.files). */
+const TYPES = fileTypesText();
 
 const TOOLS = [
   {
@@ -246,7 +273,7 @@ const TOOLS = [
   {
     name: 'list_components',
     description:
-      'List all available ws_* design system components with their PHP function signatures. Use this to find the right component for a UI element.',
+      `List all available ${anyNamed()}design system components with their ${config.framework === 'php' ? 'PHP function ' : ''}signatures. Use this to find the right component for a UI element.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -260,9 +287,7 @@ const TOOLS = [
   {
     name: 'list_tokens',
     description:
-      config.framework === 'php'
-        ? 'List design tokens from platform-tokens.css with their purpose, tier (brand | semantic | primitive | alias) and, for a legacy alias, the --brand* token to use instead. Filter by category, or pass a plain-language role (e.g. "red text on light" gives --brand-ink). With platform "swift", each token is shown as Swift (Color(hex: 0xRRGGBB)) beside the native app constants that mirror it, drifted ones marked; add app to see one app, and with app and no filter its off-system constants too.'
-        : 'List the design system\'s tokens with their value, tier and purpose. Filter by category (colors, spacing, typography, shadows, radii), or pass a plain-language role (e.g. "danger text" or "card padding") for the best matches.',
+      'List the design system\'s tokens with their value, tier and purpose. Filter by category (colors, spacing, typography, shadows, radii), or pass a plain-language role (e.g. "danger text" or "card padding") for the best matches.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -284,7 +309,7 @@ const TOOLS = [
         },
         app: {
           type: 'string',
-          description: 'With platform "swift": a native app key from native_apps (back-pocket, field-guide, planner-mac)',
+          description: `With platform "swift": a native app key from native_apps${checkableApps().length ? ` (${checkableApps().join(', ')})` : ''}`,
         },
       },
     },
@@ -292,7 +317,7 @@ const TOOLS = [
   {
     name: 'suggest_component',
     description:
-      'Given a description of what UI element you need, suggest which ws_* component to use, ranked from the generated catalog (summary, when-to-use, synonyms). Each suggestion carries option values and defaults from the catalog, the legacy lookalike to avoid, the alternatives to choose instead and when (insteadOf), and a playground preview URL, labelled curated (a hand-written fixture) or auto (built from the catalog entry). E.g., "a confirm dialog before deleting a workshop" → ws_modal. A request whose head noun is a page, screen or flow also gets the matching screen recipe, a runnable file with default, loading, empty and error previews, first when it outscores the components, e.g. "a page listing workshops with filters" → recipe:filtered-workshop-list.',
+      `Given a description of what UI element you need, suggest which ${anyNamed()}component to use, ranked from the catalog (summary, when-to-use, synonyms). Each suggestion carries option values and defaults from the catalog, the legacy lookalike to avoid, the alternatives to choose instead and when (insteadOf), and a playground preview URL, labelled curated (a hand-written fixture) or auto (built from the catalog entry). A request whose head noun is a page, screen or flow also gets the matching screen recipe, a runnable file with default, loading, empty and error previews, first when it outscores the components.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -322,7 +347,7 @@ const TOOLS = [
         },
         file_path: {
           type: 'string',
-          description: 'Optional, for Swift: the project-relative or absolute path the snippet belongs in, e.g. library-app/WorkshoprLibrary/Screens/Home/HomeView.swift',
+          description: 'Optional, for Swift: the project-relative or absolute path the snippet belongs in',
         },
       },
       required: ['code', 'language'],
@@ -372,22 +397,94 @@ const TOOLS = [
   {
     name: 'native_apps',
     description:
-      'The native apps in the design-system manifest (design-system/workshopr-design-system.json, native.apps). With no app: one line per app. With an app key: its full binding (source, theme files, token namespace, annotation style, how project files are added), build, run and screenshot commands, hazards, sanctioned scopes, and a live count of the native check\'s findings by rule with the drifted constants named. Call it before writing Swift.',
+      `The native apps in the design-system manifest (${config.nativeManifest || 'nativeManifest in enforcer.config.json'}, native.apps). With no app: one line per app. With an app key: its full binding (source, theme files, token namespace, annotation style, how project files are added), build, run and screenshot commands, hazards, sanctioned scopes, and a live count of the native check\'s findings by rule with the drifted constants named. Call it before writing Swift.`,
     inputSchema: {
       type: 'object',
       properties: {
         app: {
           type: 'string',
-          description: 'Optional app key: back-pocket, field-guide or planner-mac',
+          description: `Optional app key${Object.keys(nativeCtx.apps).length ? `: ${orList(Object.keys(nativeCtx.apps))}` : ''}`,
         },
       },
     },
   },
+  {
+    name: 'consult_ui',
+    description:
+      `Call before adding markup to a page or stylesheet: pass the file and one plain-words description per UI piece you are about to build ("a status label on each team member row", "a confirm-before-delete dialog"). For each piece it lists the ${anyNamed()}components that could build it, with an example call, when to use it and when not to, and a preview link, or says nothing in the inventory fits. Build each piece with one of its candidates, or record a case with the piece id and your reason. Shell equivalent: ${CLI} consult --file <path> --piece "<description>".`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'Project-relative path of the file you are about to change, e.g. pages/team.php' },
+        pieces: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          description: 'One plain-words description per UI piece you are about to build',
+        },
+      },
+      required: ['file', 'pieces'],
+    },
+  },
+  {
+    name: 'record_case',
+    description:
+      `Call when you keep your own markup for a piece instead of the components consult_ui offered, build a piece nothing in the inventory fits, or keep markup a design-system finding flagged. Pass the file, your reason, the markup you wrote, and either the piece id from consult_ui (P-...) or the finding key a finding message ends with, (finding: <key>). Only for a ${TYPES.gated} file the gate covers${TYPES.detected ? ` (lookalikes in ${TYPES.detected} files are only reported)` : ''}. The case waits for ${REVIEWER} on the review page, and its finding is not reported again until the decision is carried out. Shell equivalent: ${CLI} record-case --json \'{"file": "<path>", "reason": "<why>", "markup": "<what you wrote>", "piece_id": "<P-...>"}\'.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'Project-relative path of the file the markup is in, e.g. pages/team.php' },
+        reason: { type: 'string', description: 'Why you kept your own version, or why nothing offered fits' },
+        markup: { type: 'string', description: 'The markup you wrote, as it stands in the file' },
+        piece_id: { type: 'string', description: 'The piece id consult_ui gave this piece (P-1a2b3c). Pass this or finding' },
+        finding: { type: 'string', description: 'The key a lookalike finding message ends with, (finding: <key>). Pass this or piece_id' },
+        sample_html: { type: 'string', description: 'Optional static HTML of your version for the review page to render, with sample values in place of PHP' },
+        chosen: { type: 'string', description: `Optional: the candidate you would use if ${REVIEWER} decides on a component${config.components.functionPrefix ? `, e.g. ${config.components.functionPrefix}badge` : ''}` },
+      },
+      required: ['file', 'reason', 'markup'],
+    },
+  },
+  {
+    name: 'scan_components',
+    description:
+      `Scan the codebase for bespoke patterns that keep reappearing with no component in the inventory (a class in three or more files, or one component word such as -menu across three or more bespoke classes), add the pieces agents built with nothing fitting and the cases ${REVIEWER} marked "should become a component", and list the suggested new components, the most used first, with the closest existing components and the review page link. With no paths it rescans and saves the list the review page shows; with paths it scans only those files or folders and saves nothing. Shell equivalent: ${CLI} suggest [--force] [paths...].`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional project-relative files or folders to scan instead of the whole codebase, e.g. ["pages/reports"]',
+        },
+      },
+    },
+  },
+  {
+    name: 'apply_review',
+    description:
+      `Call when ${REVIEWER} asks you to apply the design system review. It carries out the decisions saved on the review page: a case where ${REVIEWER} chose the component, or chose to undo an automatic swap, comes back as a list with the file, the line, the markup and the component call; make each change in the file by hand, then call apply_review again so the enforcer checks the file and marks the case. A kept case\'s finding goes into the baseline so it stops coming back; cases marked fine or to become a component are closed; cases left for later are not touched. Shell equivalent: ${CLI} apply-review.`,
+    inputSchema: { type: 'object', properties: {} },
+  },
 ];
+
+/* text.tools rewrites a tool's description ("list_tokens") or one input's ("check_snippet.file_path") in the project's own words. */
+for (const [key, text] of Object.entries(config.text.tools || {})) {
+  if (typeof text !== 'string') continue;
+  const [tool, prop] = key.split('.');
+  const def = TOOLS.find(t => t.name === tool);
+  if (!def) continue;
+  if (!prop) def.description = text;
+  else if (def.inputSchema.properties?.[prop]) def.inputSchema.properties[prop].description = text;
+}
+
+/* The component gate's tools exist only where componentGate.enabled switches the gate on. */
+const GATE_TOOLS = new Set(['consult_ui', 'record_case', 'scan_components', 'apply_review']);
 
 // ─── Tool Handlers ───
 
-server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: TOOLS }));
+server.setRequestHandler(ListToolsRequestSchema, () => ({
+  tools: gateSettings().enabled ? TOOLS : TOOLS.filter(t => !GATE_TOOLS.has(t.name)),
+}));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
@@ -426,6 +523,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return await handleReport(args);
       case 'apply_report':
         return await handleApplyReport(args);
+      case 'consult_ui':
+        return handleConsultUi(args);
+      case 'record_case':
+        return handleRecordCase(args);
+      case 'scan_components':
+        return handleScanComponents(args);
+      case 'apply_review':
+        return await handleApplyReview();
       default:
         return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
     }
@@ -440,7 +545,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // ─── Handler Implementations ───
 
 /* Every file tool reads, and fix_file writes, only inside the project. An absolute
-   path elsewhere, or a relative one that climbs out with '..', is refused. */
+   path elsewhere, or a relative one that climbs out with '..', is refused; fix_file
+   also refuses one whose real location, its symlinks followed, is outside. */
 function resolvePath(filePath) {
   const abs = filePath.startsWith('/') ? resolve(filePath) : resolve(PROJECT_ROOT, filePath);
   if (!insideProject(abs)) throw new OutsideProjectError(filePath);
@@ -506,6 +612,8 @@ function handleValidateFile({ file_path }) {
 
 function handleFixFile({ file_path, dry_run = false }) {
   const fullPath = resolvePath(file_path);
+  // It writes, so a path inside the project that a symlink leads out of is refused too.
+  if (!insideProjectReal(fullPath)) throw new OutsideProjectError(file_path);
   if (!existsSync(fullPath)) {
     return { content: [{ type: 'text', text: `File not found: ${fullPath}` }], isError: true };
   }
@@ -628,14 +736,16 @@ function handleListComponents({ filter } = {}) {
     return { content: [{ type: 'text', text: out }] };
   }
 
-  let output = `## Workshopr Design System Components (${components.length})\n\n`;
-  output += `| Component | Scope | PHP Signature | Summary |\n|-----------|-------|---------------|---------|\n`;
+  // PHP helper functions, with each one's twin in the project's JavaScript file (components.js) where it has one.
+  const jsFile = config.components.js?.file;
+  let output = `## ${config.name ? `${config.name} ` : ''}Design System Components (${components.length})\n\n`;
+  output += jsFile
+    ? `| Component | Scope | PHP Signature | JavaScript (${jsFile}) | Summary |\n|-----------|-------|---------------|${'-'.repeat(15 + jsFile.length)}|---------|\n`
+    : `| Component | Scope | PHP Signature | Summary |\n|-----------|-------|---------------|---------|\n`;
   for (const c of components) {
-    output += `| \`${c.name}\` | ${c.scope} | \`${c.phpCall}\` | ${(c.summary || '').replace(/\|/g, '/')} |\n`;
+    output += `| \`${c.name}\` | ${c.scope} | \`${c.phpCall}\` | ${jsFile ? `${c.js ? `\`${c.js}\`` : ''} | ` : ''}${(c.summary || '').replace(/\|/g, '/')} |\n`;
   }
-  output += `\nFrom \`/design-system/components.generated.json\` (components in helpers.php, page-level in includes/components/*.php, app-local in app/includes/workshop-list.php).\n`;
-  output += `CSS in \`/includes/components/components.css\`.\n`;
-  output += `Demos at \`/design-system/component-library.php\`.\n`;
+  output += `\n${config.text.componentsFooter || `From \`${config.catalog}\`.`}\n`;
 
   return { content: [{ type: 'text', text: output }] };
 }
@@ -708,13 +818,15 @@ function handleListTokens({ category = 'all', role, platform, app } = {}) {
 
   const allTokens = tokenParser.tokens;
 
+  // Colours by name, plus the names the project files under colours too (config tokenNames.colorWords).
+  const colorWords = tokenNamePatterns('colorWords');
   const categories = {
     colors: (name) =>
-      name.includes('color') || name.includes('phase-') || name.includes('primary') ||
+      name.includes('color') || name.includes('primary') ||
       name.includes('dark') || name.includes('light') || name.includes('gray') ||
       name.includes('bg-') || name.includes('text-') || name.includes('ink') ||
       name.includes('success') || name.includes('warning') || name.includes('error') ||
-      name.includes('info') || name.includes('navy') || name.match(/-cat-\d/),
+      name.includes('info') || colorWords.some(re => re.test(name)),
     spacing: (name) => name.startsWith('--space-'),
     typography: (name) =>
       name.startsWith('--font-') || name.startsWith('--text-') ||
@@ -722,9 +834,10 @@ function handleListTokens({ category = 'all', role, platform, app } = {}) {
     shadows: (name) => name.startsWith('--shadow-'),
     radii: (name) => name.startsWith('--radius-'),
   };
-  // An init-connected project's tokens carry their group from the import, so categories follow it.
-  if (config.framework !== 'php') {
-    const GROUP = { colors: 'Colors', spacing: 'Spacing', typography: 'Typography', shadows: 'Shadows', radii: 'Radius' };
+  // A catalog init generated (its meta lists the sources it was built from) gives each token one of the
+  // import's groups, so categories follow them; any other catalog's groups are its own, so names decide.
+  const GROUP = { colors: 'Colors', spacing: 'Spacing', typography: 'Typography', shadows: 'Shadows', radii: 'Radius' };
+  if (Array.isArray(tokenParser.data?.catalog?.meta?.sources)) {
     for (const [key, group] of Object.entries(GROUP)) categories[key] = name => tokenParser.info.get(name)?.group === group;
   }
 
@@ -762,9 +875,8 @@ function handleSuggestComponent({ description }) {
     return {
       content: [{
         type: 'text',
-        text: config.framework === 'php'
-          ? `No matching ws_* component found for: "${description}"\n\nYou may need to create a new component. Add it as a ws_* function in /includes/components/helpers.php with a demo in /design-system/components/.`
-          : `No matching component found for: "${description}"\n\nIf the design system has one under another name, add the words you used to .ds-enforcer/synonyms.json. Otherwise it may need a new component in ${(config.sources || []).filter(s => s.type === 'react').map(s => s.path).join(', ') || 'your components folder'}.`,
+        text: `No matching ${anyNamed()}component found for: "${description}"\n\n${config.text.noComponent
+          || `If the design system has one under another name, add the words you used to .ds-enforcer/synonyms.json. Otherwise it may need a new component in ${(config.sources || []).filter(s => s.type === 'react').map(s => s.path).join(', ') || 'your components folder'}.`}`,
       }],
     };
   }
@@ -790,6 +902,7 @@ function handleSuggestComponent({ description }) {
       output += `- **PHP**: \`${comp.phpCall}\`\n`;
     }
     if (s.example) output += `- **Example**: \`${s.example}\`\n`;
+    if (s.js) output += `- **JavaScript**: \`${s.js}\`${config.components.js?.file ? ` from \`${config.components.js.file}\`` : ''}, same options; for markup a script draws\n`;
     if (s.options.length) output += `- **Options** (only these values exist): ${s.options.join('; ')}\n`;
     if (s.demo) output += `- **Demo**: \`${s.demo}\`\n`;
     if (s.preview) output += `- **Preview**: \`${s.preview}\` (${s.previewKind === 'auto' ? 'auto preview built from the catalog entry, not a curated fixture' : 'curated playground fixture'})\n`;
@@ -799,6 +912,69 @@ function handleSuggestComponent({ description }) {
   }
 
   return { content: [{ type: 'text', text: output }] };
+}
+
+function handleConsultUi({ file, pieces } = {}) {
+  const settings = gateSettings();
+  if (!settings.enabled) {
+    return { content: [{ type: 'text', text: 'The component gate is off for this project (componentGate.enabled in enforcer.config.json).' }], isError: true };
+  }
+  const described = Array.isArray(pieces) ? pieces.filter(p => typeof p === 'string' && p.trim()) : [];
+  if (typeof file !== 'string' || !file.trim() || !described.length) {
+    return { content: [{ type: 'text', text: 'consult_ui takes file (the project-relative path you are about to change) and pieces (one plain-words description per UI piece, at least one).' }], isError: true };
+  }
+  const rel = relOf(resolvePath(file.trim())); // refuses paths outside the project
+  const result = consult({ file: rel, pieces: described }, { data: componentRegistry.data, minScore: settings.minScore });
+  return { content: [{ type: 'text', text: formatConsult(result) }] };
+}
+
+function handleRecordCase(args = {}) {
+  const settings = gateSettings();
+  if (!settings.enabled) {
+    return { content: [{ type: 'text', text: 'The component gate is off for this project (componentGate.enabled in enforcer.config.json).' }], isError: true };
+  }
+  try {
+    // recordCase refuses paths outside the project with the same insideProject check resolvePath uses.
+    const recorded = recordCase(args, { data: componentRegistry.data, minScore: settings.minScore });
+    return { content: [{ type: 'text', text: recordedText(recorded) }] };
+  } catch (error) {
+    if (!(error instanceof CaseInputError)) throw error;
+    return { content: [{ type: 'text', text: error.message }], isError: true };
+  }
+}
+
+function handleScanComponents({ paths } = {}) {
+  const settings = gateSettings();
+  if (!settings.enabled) {
+    return { content: [{ type: 'text', text: 'The component gate is off for this project (componentGate.enabled in enforcer.config.json).' }], isError: true };
+  }
+  if (paths !== undefined && (!Array.isArray(paths) || !paths.every(p => typeof p === 'string' && p.trim()))) {
+    return { content: [{ type: 'text', text: 'scan_components takes paths (optional): a list of project-relative files or folders to scan.' }], isError: true };
+  }
+  const data = componentRegistry.data;
+  try {
+    if (paths?.length) {
+      const wanted = paths.map(p => p.trim());
+      const dismissed = dismissedIds();
+      const found = scanSuggestions({ files: wanted, data, minScore: settings.minScore }).filter(s => !dismissed.has(s.id));
+      return { content: [{ type: 'text', text: formatSuggestions(found, { reviewUrl: settings.reviewUrl, scope: wanted.join(', ') }) }] };
+    }
+    // Called on demand, so it rescans; the end-of-session refresh is the once-a-day one.
+    const { entries } = refreshSuggestions({ force: true, data, minScore: settings.minScore });
+    return { content: [{ type: 'text', text: formatSuggestions(entries, { reviewUrl: settings.reviewUrl }) }] };
+  } catch (error) {
+    if (!(error instanceof SuggestInputError)) throw error;
+    return { content: [{ type: 'text', text: error.message }], isError: true };
+  }
+}
+
+async function handleApplyReview() {
+  const settings = gateSettings();
+  if (!settings.enabled) {
+    return { content: [{ type: 'text', text: 'The component gate is off for this project (componentGate.enabled in enforcer.config.json).' }], isError: true };
+  }
+  const result = await applyReview({ data: componentRegistry.data });
+  return { content: [{ type: 'text', text: formatApplyReview(result, { reviewUrl: settings.reviewUrl }) }] };
 }
 
 function handleCheckSnippet({ code, language, file_path } = {}) {
@@ -813,13 +989,13 @@ function handleCheckSnippet({ code, language, file_path } = {}) {
       violations = validateSwift(code, typeof file_path === 'string' && file_path ? file_path : fakePath, tokenParser, nativeCtx);
       break;
     case 'css':
-      violations = validateCSS(code, fakePath, tokenParser);
+      violations = validateCSS(code, fakePath, tokenParser).concat(findSmallIcons(code, fakePath, tokenParser));
       break;
     case 'php':
-      violations = validatePHP(code, fakePath, tokenParser, componentRegistry);
+      violations = validatePHP(code, fakePath, tokenParser, componentRegistry).concat(findSmallIcons(code, fakePath, tokenParser));
       break;
     case 'js':
-      violations = validateJS(code, fakePath, tokenParser);
+      violations = validateJS(code, fakePath, tokenParser).concat(findSmallIcons(code, fakePath, tokenParser));
       break;
     case 'jsx':
     case 'tsx':
@@ -863,8 +1039,8 @@ const SIMULATOR = 'iPhone 17 Pro';
 /** Build, run and screenshot commands for an app, all from the repo root. */
 function nativeCommands(key, app) {
   const lines = [];
-  // The check command: Workshopr's npm script, or the enforcer's own CLI everywhere else.
-  const checkCmd = nativeCtx.manifest.check || (config.framework === 'php' ? 'npm run lint:ds:native' : null);
+  // The check command: the manifest's own (check), or the enforcer's CLI.
+  const checkCmd = nativeCtx.manifest.check || null;
   if (app.platform === 'ios') {
     if (app.project && app.scheme) lines.push(`Build: xcodebuild -project ${app.project} -scheme ${app.scheme} -destination 'platform=iOS Simulator,name=${SIMULATOR}' build`);
     if (app.projectSpec) lines.push(`After adding or removing a file: xcodegen generate, run in ${app.root}/ (the project is generated from ${app.projectSpec})`);
@@ -889,8 +1065,8 @@ function handleNativeApps({ app } = {}) {
     for (const [key, a] of Object.entries(apps)) {
       text += `- **${key}**: ${a.name} (${a.platform}, ${a.ui}${a.external ? ', external: described, never checked' : ''}), source \`${a.source || a.root}\`, theme files ${(a.themeFiles || []).map(f => `\`${f}\``).join(', ')}\n`;
     }
-    const guide = nativeCtx.manifest.doc || (config.framework === 'php' ? '/design-system/native.md' : null);
-    const check = nativeCtx.manifest.check || (config.framework === 'php' ? 'npm run lint:ds:native' : 'ds-enforcer check');
+    const guide = nativeCtx.manifest.doc || null;
+    const check = nativeCtx.manifest.check || 'ds-enforcer check';
     text += `\nCall native_apps with an app key for its binding, commands and live findings.${guide ? ` The guide is \`${guide}\`;` : ''} The check is \`${check}\`.\n`;
     return { content: [{ type: 'text', text }] };
   }
@@ -931,7 +1107,7 @@ function handleNativeApps({ app } = {}) {
   text += Object.keys(byRule).length ? Object.entries(byRule).sort().map(([rule, n]) => `- ${rule}: ${n}`).join('\n') + '\n' : '- None.\n';
   const drifted = findings.filter(f => f.rule === 'native-token-drift');
   if (drifted.length) text += `\nDrifted constants:\n${drifted.map(f => `- ${f.message} (${f.file}:${f.line})`).join('\n')}\n`;
-  text += nativeCtx.manifest.check || config.framework === 'php' ? `\nEvery finding: ${nativeCtx.manifest.check || 'npm run lint:ds:native'} -- --app ${app} --all\n` : `\nEvery finding: ds-enforcer check ${a.source || a.root} --all\n`;
+  text += nativeCtx.manifest.check ? `\nEvery finding: ${nativeCtx.manifest.check} -- --app ${app} --all\n` : `\nEvery finding: ds-enforcer check ${a.source || a.root} --all\n`;
   return { content: [{ type: 'text', text }] };
 }
 
@@ -1110,6 +1286,7 @@ async function main() {
   console.error(`${config.name ? `${config.name} ` : ''}Design System Enforcer MCP server running`);
   if (tokenParser) console.error(`Loaded: ${tokenParser.getStats().totalTokens} tokens, ${componentRegistry.components.size} components`);
   else console.error(connected ? `Not loaded: ${loadError}` : 'Not connected yet: the init tool connects this project');
+  if (staleConfig()) console.error(`Warning: ${staleConfigText(CONFIG_PATH, config.configVersion)}`);
 }
 
 main().catch(console.error);

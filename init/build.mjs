@@ -34,6 +34,7 @@ function writeNative(root, sources, extras = {}) {
   return Object.keys(apps).length;
 }
 import { parseColor, toHex } from '../colour.js';
+import { CONFIG_VERSION } from '../config-file.js';
 
 /* One comparable form per value: colours as hex (+alpha), lengths in px, the rest as written. */
 function comparable(t, rootPx) {
@@ -196,6 +197,8 @@ export function connect(root, { sources, rootPx = 16, rules = {}, replace = fals
   const houseRule = (on, base) => ({ ...base, enabled: Boolean(on) });
   const cfg = {
     ...(existing || {}),
+    // The config format this code reads (config-file.js); a file without it reads as older.
+    configVersion: CONFIG_VERSION,
     projectRoot: '.',
     framework,
     sources: sources.map(({ type, path: p }) => ({ type, path: p })),

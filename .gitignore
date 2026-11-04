@@ -3,3 +3,5 @@ node_modules/
 # Generated per project by `ds-enforcer init`; the test fixtures regenerate theirs
 tests/fixtures/**/.ds-enforcer/
 tests/fixtures/**/enforcer.config.json
+# The kit fixture is configured by hand, not by init: its config is the fixture
+!tests/fixtures/kit/enforcer.config.json

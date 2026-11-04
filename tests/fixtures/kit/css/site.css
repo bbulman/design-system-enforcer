@@ -1,0 +1,3 @@
+.site-nav { display: flex; gap: var(--space-4); }
+.hero-title { color: #9A3412; font-family: Georgia, serif; }
+.toolbar .glyphs-outlined { font-size: 14px; }

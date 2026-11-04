@@ -8,64 +8,53 @@
  *   3. enforcer.config.json beside this file (how Workshopr carries its own), only
  *      when the project being worked on is the one the server lives in
  * Paths in it are relative to projectRoot, which is relative to the config file.
- * A key the file leaves out keeps the default below; the defaults carry no
- * house rules, so those are opt-in per project.
+ * A key the file leaves out keeps its default (config-defaults.js); the defaults
+ * carry no house rules, so those are opt-in per project.
  *
  * With no config anywhere the project is not connected yet: the server still
  * starts, and every tool but init says to run init.
  */
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, lstatSync, realpathSync } from 'fs';
 import { resolve, relative, isAbsolute, dirname, sep } from 'path';
+import { currentFormat, findConfig as findConfigFile } from './config-file.js';
+import { DEFAULTS, merge } from './config-defaults.js';
 
-export const DEFAULTS = {
-  projectRoot: '.',
-  framework: 'css',
-  tokensCss: '.ds-enforcer/tokens.css',
-  catalog: '.ds-enforcer/catalog.json',
-  synonyms: '.ds-enforcer/synonyms.json',
-  nativeManifest: null,
-  searchModule: null,
-  rootPx: 16,
-  sources: [],
-  exemptFiles: [],
-  exemptDirs: ['node_modules', 'vendor', '.git', '.ds-enforcer'],
-  rawControlSkip: ['^vendor/', '^node_modules/', '^\\.git/'],
-  docs: { web: null, native: null },
-  rules: {
-    pureBlack: { enabled: false, severity: 'high', message: 'Pure black (#000) is not allowed', suggestion: '' },
-    pureWhite: { enabled: false, severity: 'medium', message: 'Pure white backgrounds are not allowed', suggestion: '' },
-  },
-};
+export { DEFAULTS, merge } from './config-defaults.js';
 
-const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
-export function merge(base, over) {
-  const out = { ...base };
-  for (const [k, v] of Object.entries(over || {})) out[k] = isObj(v) && isObj(base[k]) ? merge(base[k], v) : v;
-  return out;
+// The config format this code reads, and what moved into the config with it (config-file.js has no side effects, for staged and init).
+export { CONFIG_VERSION, MOVED_SETTINGS, currentFormat, staleConfigText } from './config-file.js';
+
+/** A text template with its {key} placeholders filled from values; an unknown key is left as written. */
+export const fillText = (template, values = {}) =>
+  String(template).replace(/\{(\w+)\}/g, (m, key) => (Object.hasOwn(values, key) ? String(values[key]) : m));
+
+/* config tokenNames[key] compiled, again only when the config changes; a pattern that is not a regular expression is left out. */
+const compiledNames = new Map();
+export function tokenNamePatterns(key) {
+  const from = config.tokenNames?.[key];
+  const hit = compiledNames.get(key);
+  if (hit && hit.from === from) return hit.res;
+  const res = [];
+  for (const p of Array.isArray(from) ? from : []) {
+    if (typeof p !== 'string') continue;
+    try { res.push(new RegExp(p)); } catch { /* not a regular expression */ }
+  }
+  compiledNames.set(key, { from, res });
+  return res;
 }
+
+/** A literal string, escaped for use inside a regular expression. */
+export const escapeRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** A text setting that may be a list of sentences, as one string. */
+export const joinText = v => (Array.isArray(v) ? v.join(' ') : v);
+
 
 /** The directory the user is working in: where init looks and writes. */
 export const PROJECT_DIR = resolve(process.env.ENFORCER_PROJECT_ROOT || process.env.CLAUDE_PROJECT_DIR || process.cwd());
 
-function findConfig() {
-  if (process.env.ENFORCER_CONFIG) return resolve(process.env.ENFORCER_CONFIG);
-  // The nearest enforcer.config.json at or above the project directory, the way git finds .git.
-  for (let dir = PROJECT_DIR; ; dir = dirname(dir)) {
-    const candidate = resolve(dir, 'enforcer.config.json');
-    if (existsSync(candidate) && candidate !== resolve(import.meta.dirname, 'enforcer.config.json')) return candidate;
-    if (dirname(dir) === dir) break;
-  }
-  // The config beside the server belongs to the project the server lives in, and applies only
-  // when that project (or a folder inside it) is the one being worked on. Any other project,
-  // named by the environment or just the working directory, must never be graded by it.
-  const beside = resolve(import.meta.dirname, 'enforcer.config.json');
-  if (existsSync(beside)) {
-    const root = resolve(import.meta.dirname, JSON.parse(readFileSync(beside, 'utf-8')).projectRoot || '.');
-    const rel = relative(root, PROJECT_DIR);
-    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) return beside;
-  }
-  return null;
-}
+/** The config file for a project directory (PROJECT_DIR unless named), or null when there is none (config-file.js). */
+export const findConfig = (projectDir = PROJECT_DIR) => findConfigFile(projectDir);
 
 /* Live bindings: reloadConfig() reassigns these, and every importer sees the new values. */
 export let CONFIG_PATH = null;
@@ -90,8 +79,31 @@ export const projectPath = p => (isAbsolute(p) ? p : resolve(PROJECT_ROOT, p));
 /** Raw-control skip patterns, written as regex strings in the config. */
 export const rawControlSkip = () => config.rawControlSkip.map(s => new RegExp(s));
 
+/** A connected config file written before CONFIG_VERSION, which this code would read with rules silently off. */
+export const staleConfig = () => connected && !currentFormat(config);
+
 /** True when a path resolves inside the project root (the root itself counts). */
 export function insideProject(abs) {
   const rel = relative(PROJECT_ROOT, resolve(abs));
+  return rel === '' || (!rel.startsWith('..' + sep) && rel !== '..' && !isAbsolute(rel));
+}
+
+/**
+ * insideProject for a path about to be written or read on the user's word: also true only when
+ * its real location is inside the project's, so a symlink inside the project cannot lead out of it.
+ * The nearest part of the path that exists is the one resolved; a link that leads nowhere is refused.
+ */
+export function insideProjectReal(abs) {
+  if (!insideProject(abs)) return false;
+  let at = resolve(abs);
+  for (;;) {
+    try { lstatSync(at); break; } catch { /* not there yet: its folder decides */ }
+    const up = dirname(at);
+    if (up === at) return false;
+    at = up;
+  }
+  let real, root;
+  try { real = realpathSync(at); root = realpathSync(PROJECT_ROOT); } catch { return false; }
+  const rel = relative(root, real);
   return rel === '' || (!rel.startsWith('..' + sep) && rel !== '..' && !isAbsolute(rel));
 }

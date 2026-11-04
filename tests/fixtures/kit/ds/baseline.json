@@ -1,0 +1,8 @@
+{
+  "_comment": "The kit fixture's existing findings: internal/goals.php's bespoke badge, so only new findings fail.",
+  "updatedAt": "2026-11-04T00:00:00.000Z",
+  "total": 1,
+  "counts": {
+    "internal/goals.php|bespoke-lookalike|status-badge": 1
+  }
+}

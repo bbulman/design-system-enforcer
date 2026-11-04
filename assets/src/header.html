@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>design-system-enforcer: README banner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;500&display=block" rel="stylesheet">
+<link href="style.css" rel="stylesheet">
+<style>
+  /* 1200 by 300 CSS pixels, rendered at 2x: 2400 by 600. */
+  .canvas {
+    width: 1200px;
+    height: 300px;
+    border-radius: 16px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    column-gap: 48px;
+    padding: 0 72px 0 64px;
+    --name-size: 20px;
+    --stroke: 3px;
+    --lift: 14px;
+    --fix-size: 30px;
+    --caret-gap: 8px;
+    --caret-w: 22px;
+    --caret-h: 12px;
+  }
+  .words { display: flex; flex-direction: column; gap: 18px; }
+  .headline { font-size: 46px; line-height: 1.06; }
+  .proof { font-size: 36px; padding-top: 44px; }
+</style>
+</head>
+<body>
+  <main class="canvas">
+    <div class="words">
+      <p class="name">design-system-enforcer</p>
+      <h1 class="headline">Keeps coding agents inside your design system.</h1>
+    </div>
+    <p class="proof"><span class="prop">background</span><span class="punct">: </span><span class="struck">#e54d4c<span class="correction">var(--brand)</span><svg class="caret" viewBox="0 0 22 12" aria-hidden="true"><path d="M2 10 L11 2 L20 10"/></svg></span><span class="punct">;</span></p>
+  </main>
+</body>
+</html>

@@ -1,0 +1,46 @@
+{
+  "native": {
+    "_comment": "The kit fixture's native apps: two SwiftUI apps that mirror ds/tokens.css, and one described but kept elsewhere.",
+    "doc": "ds/NATIVE.md",
+    "baseline": "ds/native-baseline.json",
+    "brandFonts": ["Kitserif", "Kitsans"],
+    "iconFonts": ["Kit Glyphs"],
+    "apps": {
+      "pocket": {
+        "name": "Pocket",
+        "platform": "ios",
+        "ui": "SwiftUI",
+        "minOS": "iOS 17",
+        "root": "apps/pocket",
+        "source": "apps/pocket/Pocket",
+        "project": "apps/pocket/Pocket.xcodeproj",
+        "scheme": "Pocket",
+        "bundleId": "example.kit.pocket",
+        "themeFiles": ["apps/pocket/Pocket/Theme/Theme.swift"],
+        "tokenNamespace": "Kit.C",
+        "annotation": "// --token after the literal",
+        "hazards": ["The project file is hand-kept: add new Swift files to it."],
+        "sanctionedScopes": { "Tone": "content-type hues, each one kind of item" }
+      },
+      "desk": {
+        "name": "Desk",
+        "platform": "macos",
+        "ui": "SwiftUI",
+        "root": "apps/desk",
+        "source": "apps/desk/Sources/Desk",
+        "package": "apps/desk/Package.swift",
+        "run": "swift run --package-path apps/desk",
+        "themeFiles": ["apps/desk/Sources/Desk/Theme.swift"]
+      },
+      "partner": {
+        "name": "Partner",
+        "platform": "ios",
+        "ui": "SwiftUI",
+        "external": true,
+        "source": "elsewhere/Partner",
+        "note": "Kept in its own repository.",
+        "doc": "https://partner.example/design"
+      }
+    }
+  }
+}

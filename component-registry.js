@@ -8,6 +8,47 @@ import { resolve } from 'path';
 import { pathToFileURL } from 'url';
 
 import { search } from './catalog-search.js';
+import { config, escapeRe } from './config.js';
+
+/* The helper-function prefix (components.functionPrefix, e.g. ws_), or none. */
+const fnPrefix = () => config.components.functionPrefix || '';
+/* A catalog signature written as a call, prefix_name($a, $b): its parameter list. */
+const callSignature = () => new RegExp(`^${escapeRe(fnPrefix())}\\w+\\((.*)\\)(?::\\s*\\S+)?$`);
+/* A call to one of the project's helpers in source: prefix_name( */
+const helperCall = () => new RegExp(`\\b(${escapeRe(fnPrefix())}[a-z0-9_]+)\\s*\\(`, 'g');
+/* A class that is a component's own markup (components.classPrefix and extraClassPrefixes), never a lookalike. */
+const ownClass = c => [config.components.classPrefix, ...(config.components.extraClassPrefixes || [])].some(p => p && c.startsWith(p));
+
+/**
+ * Raw markup a component already draws, by concept. Each is offered only when the catalog has the
+ * component of that name (functionPrefix + concept; a block one as its _start/_end pair).
+ */
+const RAW_HTML = [
+  { id: 'raw-button', concept: 'button', arg: '$text', severity: 'medium', description: 'Raw HTML button with "btn" class',
+    pattern: () => /<button[^>]*class="[^"]*(?<![\w-])btn(?![\w-])[^"]*"/gi },
+  { id: 'raw-modal', concept: 'modal', block: true, severity: 'medium', description: 'Raw HTML modal structure',
+    pattern: () => /<div[^>]*class="[^"]*(?<![\w-])modal[-_]?(overlay|content|wrapper)\b[^"]*"/gi },
+  { id: 'raw-card', concept: 'card', block: true, severity: 'low', description: cp => (cp ? `Raw HTML card (not using ${cp}card)` : 'Raw HTML card'),
+    pattern: own => new RegExp(`<div[^>]*class="[^"]*(?<![\\w-])card(?![\\w-])${own}[^"]*"`, 'gi') },
+  { id: 'raw-alert', concept: 'alert', arg: '$message', severity: 'medium', description: 'Raw alert/notification markup',
+    pattern: own => new RegExp(`<div[^>]*class="[^"]*(?<![\\w-])(alert|notification|message)(?![\\w-])${own}[^"]*"`, 'gi') },
+  { id: 'raw-badge', concept: 'badge', arg: '$text', severity: 'low', description: 'Raw badge markup',
+    pattern: own => new RegExp(`<span[^>]*class="[^"]*(?<![\\w-])badge(?![\\w-])${own}[^"]*"`, 'gi') },
+  { id: 'raw-tabs', concept: 'tabs', arg: '$items', severity: 'medium', description: 'Raw tab navigation markup',
+    pattern: own => new RegExp(`<(div|nav|ul)[^>]*class="[^"]*\\btab(s|[-_]nav|[-_]list)\\b${own}[^"]*"`, 'gi') },
+  { id: 'raw-input-group', concept: 'form_row', arg: '$content', severity: 'low', description: 'Raw form group markup',
+    pattern: own => new RegExp(`<div[^>]*class="[^"]*\\b(form[-_]group|input[-_]group)\\b${own}[^"]*"`, 'gi') },
+  { id: 'raw-progress', concept: 'progress', arg: '$value', severity: 'low', description: 'Raw progress bar markup',
+    pattern: own => new RegExp(`<div[^>]*class="[^"]*\\bprogress\\b${own}[^"]*"`, 'gi') },
+  { id: 'raw-tooltip', concept: 'tooltip', arg: '$text', severity: 'low', description: 'Raw tooltip markup',
+    pattern: own => new RegExp(`<(span|div)[^>]*class="[^"]*\\btooltip\\b${own}[^"]*"`, 'gi') },
+  { id: 'raw-accordion', concept: 'accordion', arg: '$items', severity: 'low', description: 'Raw accordion/collapsible markup',
+    pattern: own => new RegExp(`<div[^>]*class="[^"]*\\b(accordion|collapsible|expandable)\\b${own}[^"]*"`, 'gi') },
+  { id: 'raw-skeleton', concept: 'skeleton', severity: 'low', description: 'Raw skeleton/loading markup',
+    pattern: own => new RegExp(`<div[^>]*class="[^"]*\\b(skeleton|placeholder|shimmer)\\b${own}[^"]*"`, 'gi') },
+  { id: 'raw-empty-state', concept: 'empty_state', arg: '$title', severity: 'low', description: 'Raw empty state markup',
+    pattern: own => new RegExp(`<div[^>]*class="[^"]*\\b(empty[-_]state|no[-_]results|no[-_]data)\\b${own}[^"]*"`, 'gi') },
+];
 
 /** Index just past a PHP string literal or comment starting at i, or i when there is none. */
 function skipPhpLiteral(src, i) {
@@ -214,7 +255,7 @@ function phpArrayKeys(src, { start, end }) {
 export class ComponentRegistry {
   constructor() {
     this.components = new Map(); // function name -> catalog entry + { params, phpCall }
-    this.htmlPatterns = [];      // anti-patterns that should use ws_* components
+    this.htmlPatterns = [];      // raw markup that should use a component (RAW_HTML)
     this.legacyClasses = [];     // catalog.legacy.classes with compiled regexes
     this.data = null;            // { catalog, synonyms }
     this.loaded = false;
@@ -223,7 +264,7 @@ export class ComponentRegistry {
   load() {
     this.data = search.loadCatalog();
     for (const [name, entry] of Object.entries(this.data.catalog.components || {})) {
-      const m = String(entry.signature || '').match(/^ws_\w+\((.*)\)(?::\s*\S+)?$/);
+      const m = String(entry.signature || '').match(callSignature());
       const rawParams = m ? m[1].trim() : '';
       const params = rawParams ? rawParams.split(/,(?![^\[]*\])/).map(p => p.trim()) : [];
       this.components.set(name, { ...entry, name, params, docParams: entry.params || [], phpCall: `${name}(${params.join(', ')})` });
@@ -253,105 +294,24 @@ export class ComponentRegistry {
   }
 
   _buildHtmlPatterns() {
-    // Map raw HTML patterns to the ws_* component they should use
-    this.htmlPatterns = [
-      {
-        id: 'raw-button',
-        pattern: /<button[^>]*class="[^"]*(?<![\w-])btn(?![\w-])[^"]*"/gi,
-        description: 'Raw HTML button with "btn" class',
-        suggestion: this.exampleCall('ws_button', '$text'),
-        component: 'ws_button',
-        severity: 'medium',
-      },
-      {
-        id: 'raw-modal',
-        pattern: /<div[^>]*class="[^"]*(?<![\w-])modal[-_]?(overlay|content|wrapper)\b[^"]*"/gi,
-        description: 'Raw HTML modal structure',
-        suggestion: `${this.exampleCall('ws_modal_start')} / ws_modal_end()`,
-        component: 'ws_modal',
-        severity: 'medium',
-      },
-      {
-        id: 'raw-card',
-        pattern: /<div[^>]*class="[^"]*(?<![\w-])card(?![\w-])(?!.*ws-)[^"]*"/gi,
-        description: 'Raw HTML card (not using ws-card)',
-        suggestion: `${this.exampleCall('ws_card_start')} / ws_card_end()`,
-        component: 'ws_card',
-        severity: 'low',
-      },
-      {
-        id: 'raw-alert',
-        pattern: /<div[^>]*class="[^"]*(?<![\w-])(alert|notification|message)(?![\w-])(?!.*ws-)[^"]*"/gi,
-        description: 'Raw alert/notification markup',
-        suggestion: this.exampleCall('ws_alert', '$message'),
-        component: 'ws_alert',
-        severity: 'medium',
-      },
-      {
-        id: 'raw-badge',
-        pattern: /<span[^>]*class="[^"]*(?<![\w-])badge(?![\w-])(?!.*ws-)[^"]*"/gi,
-        description: 'Raw badge markup',
-        suggestion: this.exampleCall('ws_badge', '$text'),
-        component: 'ws_badge',
-        severity: 'low',
-      },
-      {
-        id: 'raw-tabs',
-        pattern: /<(div|nav|ul)[^>]*class="[^"]*\btab(s|[-_]nav|[-_]list)\b(?!.*ws-)[^"]*"/gi,
-        description: 'Raw tab navigation markup',
-        suggestion: this.exampleCall('ws_tabs', '$items'),
-        component: 'ws_tabs',
-        severity: 'medium',
-      },
-      {
-        id: 'raw-input-group',
-        pattern: /<div[^>]*class="[^"]*\b(form[-_]group|input[-_]group)\b(?!.*ws-)[^"]*"/gi,
-        description: 'Raw form group markup',
-        suggestion: this.exampleCall('ws_form_row', '$content'),
-        component: 'ws_form_row',
-        severity: 'low',
-      },
-      {
-        id: 'raw-progress',
-        pattern: /<div[^>]*class="[^"]*\bprogress\b(?!.*ws-)[^"]*"/gi,
-        description: 'Raw progress bar markup',
-        suggestion: this.exampleCall('ws_progress', '$value'),
-        component: 'ws_progress',
-        severity: 'low',
-      },
-      {
-        id: 'raw-tooltip',
-        pattern: /<(span|div)[^>]*class="[^"]*\btooltip\b(?!.*ws-)[^"]*"/gi,
-        description: 'Raw tooltip markup',
-        suggestion: this.exampleCall('ws_tooltip', '$text'),
-        component: 'ws_tooltip',
-        severity: 'low',
-      },
-      {
-        id: 'raw-accordion',
-        pattern: /<div[^>]*class="[^"]*\b(accordion|collapsible|expandable)\b(?!.*ws-)[^"]*"/gi,
-        description: 'Raw accordion/collapsible markup',
-        suggestion: this.exampleCall('ws_accordion', '$items'),
-        component: 'ws_accordion',
-        severity: 'low',
-      },
-      {
-        id: 'raw-skeleton',
-        pattern: /<div[^>]*class="[^"]*\b(skeleton|placeholder|shimmer)\b(?!.*ws-)[^"]*"/gi,
-        description: 'Raw skeleton/loading markup',
-        suggestion: this.exampleCall('ws_skeleton'),
-        component: 'ws_skeleton',
-        severity: 'low',
-      },
-      {
-        id: 'raw-empty-state',
-        pattern: /<div[^>]*class="[^"]*\b(empty[-_]state|no[-_]results|no[-_]data)\b(?!.*ws-)[^"]*"/gi,
-        description: 'Raw empty state markup',
-        suggestion: this.exampleCall('ws_empty_state', '$title'),
-        component: 'ws_empty_state',
-        severity: 'low',
-      },
-    ];
+    // Each raw-markup concept, mapped to the project's component for it when the catalog has one.
+    const fp = fnPrefix();
+    const cp = config.components.classPrefix;
+    const own = cp ? `(?!.*${escapeRe(cp)})` : '';
+    this.htmlPatterns = [];
+    for (const raw of RAW_HTML) {
+      const component = fp + raw.concept;
+      const block = raw.block && this.components.has(`${component}_start`);
+      if (!block && !this.components.has(component)) continue;
+      this.htmlPatterns.push({
+        id: raw.id,
+        pattern: raw.pattern(own),
+        description: typeof raw.description === 'function' ? raw.description(cp) : raw.description,
+        suggestion: block ? `${this.exampleCall(`${component}_start`)} / ${component}_end()` : this.exampleCall(component, ...(raw.arg ? [raw.arg] : [])),
+        component,
+        severity: raw.severity,
+      });
+    }
   }
 
   /**
@@ -401,7 +361,7 @@ export class ComponentRegistry {
         severity: 'medium',
         line: lineNum,
         match: `style="${styleValue.substring(0, 60)}${styleValue.length > 60 ? '...' : ''}"`,
-        message: 'Inline style attribute — move to CSS class or use ws_* component',
+        message: `Inline style attribute — move to CSS class or use ${fnPrefix() ? `${fnPrefix()}* ` : 'a '}component`,
         file: filePath,
       });
     }
@@ -448,6 +408,7 @@ export class ComponentRegistry {
       preview: entry.preview || null,
       previewKind: entry.previewKind || (entry.preview ? 'curated' : 'none'),
       insteadOf: entry.insteadOf || [],
+      js: entry.js || null,
     }));
     return search.placeRecipes(recipes, components).slice(0, limit);
   }
@@ -463,7 +424,7 @@ export class ComponentRegistry {
       const classAttr = /class\s*=\s*["']([^"']*)["']/g;
       let match;
       while ((match = classAttr.exec(content)) !== null) {
-        const foreign = match[1].split(/\s+/).filter(c => c && !/^(ws|wl)-/.test(c)).join(' ');
+        const foreign = match[1].split(/\s+/).filter(c => c && !ownClass(c)).join(' ');
         legacy.regex.lastIndex = 0;
         if (!legacy.regex.test(foreign)) continue;
         violations.push({
@@ -495,7 +456,7 @@ export class ComponentRegistry {
     const spans = commentSpans(content);
     const inComment = at => spans.some(([a, b]) => at >= a && at < b);
     const lineOf = at => content.substring(0, at).split('\n').length;
-    const callRe = /\b(ws_[a-z0-9_]+)\s*\(/g;
+    const callRe = helperCall();
     let call;
     while ((call = callRe.exec(content)) !== null) {
       const entry = this.components.get(call[1]);
@@ -551,7 +512,7 @@ export class ComponentRegistry {
     const spans = commentSpans(content);
     const inComment = at => spans.some(([a, b]) => at >= a && at < b);
     const lineOf = at => content.substring(0, at).split('\n').length;
-    const callRe = /\b(ws_[a-z0-9_]+)\s*\(/g;
+    const callRe = helperCall();
     let call;
     while ((call = callRe.exec(content)) !== null) {
       const entry = this.components.get(call[1]);
@@ -590,6 +551,7 @@ export class ComponentRegistry {
       signature: data.signature,
       source: data.source,
       importFrom: data.importFrom,
+      js: data.js || null,
     }));
   }
 }

@@ -54,13 +54,19 @@ const tickKey = v => `${v.file}|${v.type}|${v.match ?? ''}`;
 
 /** Write the checklist for the findings in `targets` (or the whole project). With
  *  keepTicks, boxes ticked in the existing report stay ticked for the same finding. */
+/* The report file, refused unless it lies inside the project, its symlinks followed. */
+function reportPath(engine, given) {
+  const path = engine.projectPath(given || DEFAULT_REPORT);
+  if (!engine.insideProjectReal(path)) throw new Error(`Refused: ${given || DEFAULT_REPORT} is outside the project (${engine.PROJECT_ROOT}). The report is written and read only inside it.`);
+  return path;
+}
+
 export async function writeReport({ targets = [], base = process.cwd(), out, min = 'low', a11y = false, keepTicks = false } = {}) {
   const engine = await loadEngine({ a11y });
   if (!engine) throw new Error('This project is not connected to a design system yet. Run init first.');
+  const path = reportPath(engine, out);
   const { findings, files, existing, baseline } = await scan(engine, targets, base);
   const shown = findings.filter(v => (RANK[v.severity] ?? 1) >= (RANK[min] ?? 1));
-  const path = engine.projectPath(out || DEFAULT_REPORT);
-  if (!engine.insideProject(path)) throw new Error('The report must be written inside the project.');
   const ticked = new Set();
   if (keepTicks && existsSync(path)) {
     for (const item of parseReport(readFileSync(path, 'utf8')).items || []) if (item.ticked) ticked.add(tickKey(item));
@@ -166,8 +172,7 @@ function applyFix(lines, item) {
 export async function applyReport({ report, select = [], acceptRest = false } = {}) {
   const engine = await loadEngine();
   if (!engine) throw new Error('This project is not connected to a design system yet. Run init first.');
-  const path = engine.projectPath(report || DEFAULT_REPORT);
-  if (!engine.insideProject(path)) throw new Error('The report must be inside the project.');
+  const path = reportPath(engine, report);
   if (!existsSync(path)) throw new Error(`No report at ${report || DEFAULT_REPORT}. Write one first (ds-enforcer report).`);
   const text = readFileSync(path, 'utf8');
   const { lines, items } = parseReport(text);
@@ -183,7 +188,7 @@ export async function applyReport({ report, select = [], acceptRest = false } = 
   const applied = [], missed = [];
   for (const [file, list] of byFile) {
     const abs = engine.projectPath(file);
-    if (!engine.insideProject(abs) || !existsSync(abs)) { list.forEach(it => missed.push({ ...it, why: 'file not found' })); continue; }
+    if (!engine.insideProjectReal(abs) || !existsSync(abs)) { list.forEach(it => missed.push({ ...it, why: 'file not found' })); continue; }
     const src = readFileSync(abs, 'utf8').split('\n');
     let changed = false;
     for (const it of list.filter(i => i.kind === 'auto').sort((a, b) => b.line - a.line)) {

@@ -1,15 +1,16 @@
 /**
- * Token Parser — reads platform-tokens.css and builds lookup maps
+ * Token Parser — reads the project's token CSS (config tokensCss) and builds lookup maps
  * for colors, spacing, typography, shadows, radii, etc. Meaning (purpose, tier,
- * and the --brand* token a legacy alias stands for) comes from the tokens
- * section of design-system/components.generated.json.
+ * and the token a legacy alias stands for) comes from the tokens section of the
+ * catalog (config catalog).
  */
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { pathToFileURL } from 'url';
 
-import { config, projectPath } from './config.js';
+import { config, projectPath, tokenNamePatterns } from './config.js';
 import { search } from './catalog-search.js';
+import { plainestColorToken } from './colour.js';
 
 export class TokenParser {
   /* platform-tokens.css: html { font-size: 80% } => 16 * 0.8 */
@@ -193,37 +194,19 @@ export class TokenParser {
   }
 
   /**
-   * Pick the best token from a list of matches.
-   * Prefers semantic tokens over raw color names.
+   * Pick the best token from a list of matches. With the project's preference
+   * (config tokenNames.colorOrder, regular expressions over the name), the first
+   * token the earliest pattern matches, else the first token; without one, the
+   * plainest name.
    */
   pickBestColorToken(tokens) {
     if (!tokens || tokens.length === 0) return null;
-    // The five brand reds come first: the per-app and category tokens that share
-    // a hex (#E54D4D is also --tips-cat-4) mean something else.
-    const brand = tokens.find(t => /^--brand(-|$)/.test(t));
-    if (brand) return brand;
-    // Prefer semantic tokens (--color-*, --text-*, --bg-*, --button-*, --card-*)
-    const semantic = tokens.find(t =>
-      t.startsWith('--color-') || t.startsWith('--text-') ||
-      t.startsWith('--bg-') || t.startsWith('--button-') ||
-      t.startsWith('--card-') || t.startsWith('--input-')
-    );
-    if (semantic) return semantic;
-    // Then prefer app-specific tokens
-    const app = tokens.find(t =>
-      t.startsWith('--mainsite-') || t.startsWith('--planner-') ||
-      t.startsWith('--coach-') || t.startsWith('--tips-') ||
-      t.startsWith('--podcasts-') || t.startsWith('--intervention-') ||
-      t.startsWith('--dna-') || t.startsWith('--training-')
-    );
-    if (app) return app;
-    // Then phase tokens
-    const phase = tokens.find(t => t.startsWith('--phase-'));
-    if (phase) return phase;
-    // Then gray scale
-    const gray = tokens.find(t => t.startsWith('--gray-'));
-    if (gray) return gray;
-    // Fallback to first
+    const order = tokenNamePatterns('colorOrder');
+    if (!order.length) return plainestColorToken(tokens);
+    for (const re of order) {
+      const hit = tokens.find(t => re.test(t));
+      if (hit) return hit;
+    }
     return tokens[0];
   }
 

@@ -2,17 +2,20 @@
 /**
  * End-to-end tests: copy each fixture project to a temp folder, run `init` and
  * `check` the way a user would, and assert on the findings. Also covers the
- * baseline, the edit hook, the accessibility review and, when the MCP SDK is
- * installed, the MCP server itself.
+ * baseline, the edit hook, the accessibility review, the checklist report and,
+ * when the MCP SDK is installed, the MCP server itself. The kit fixture is a
+ * project configured by hand (a PHP-helper design system with the house rules,
+ * the small-icon rule and the component gate on); the others are connected by init.
  *
  *   npm test
  */
 import { spawnSync, spawn } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync, readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, appendFileSync, existsSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dirname, '..');
+const VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
 const BIN = join(ROOT, 'bin', 'ds-enforcer.mjs');
 const FIXTURES = join(ROOT, 'tests', 'fixtures');
 const env = { ...process.env };
@@ -29,7 +32,7 @@ function test(name, fn) {
 function ok(cond, msg) { if (!cond) throw new Error(msg); }
 
 function project(name) {
-  const dir = mkdtempSync(join(tmpdir(), `dse-${name}-`));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `dse-${name}-`)));
   cpSync(join(FIXTURES, name), dir, { recursive: true });
   temps.push(dir);
   return dir;
@@ -52,6 +55,12 @@ test('react: init connects tokens, Figma, components and the SwiftUI app', () =>
   ok(init.code === 0, `init exited ${init.code}: ${init.err}`);
   for (const s of ['Tailwind v4', 'SwiftUI app', 'differs between sources']) ok(init.out.includes(s), `init output lacks "${s}"`);
 });
+const reactConfig = JSON.parse(readFileSync(join(react, 'enforcer.config.json'), 'utf8'));
+test('react: init writes the config format this code reads, with no house rule it was not asked for', () => {
+  const { CONFIG_VERSION } = JSON.parse(JSON.stringify({ CONFIG_VERSION: Number(/CONFIG_VERSION = (\d+)/.exec(readFileSync(join(ROOT, 'config-file.js'), 'utf8'))[1]) }));
+  ok(reactConfig.configVersion === CONFIG_VERSION, `configVersion ${reactConfig.configVersion}, expected ${CONFIG_VERSION}`);
+  for (const key of ['iconSize', 'tokenNames', 'components', 'text', 'staged']) ok(!(key in reactConfig), `init wrote ${key}`);
+});
 const rf = findings(react);
 test('react: arbitrary colour points to the system class', () => has(rf, v => v.type === 'tailwind-arbitrary-color' && v.match === 'bg-[#7C3AED]' && v.suggestion.includes('bg-brand'), 'no bg-[#7C3AED] -> bg-brand'));
 test('react: default palette colour gets the nearest system colour', () => has(rf, v => v.type === 'tailwind-default-palette' && v.match === 'text-red-600' && v.suggestion.includes('text-danger'), 'no text-red-600 -> text-danger'));
@@ -63,6 +72,12 @@ test('react: SwiftUI theme drift and view literal', () => {
   has(rf, v => v.type === 'native-hex-in-view' && v.file.endsWith('HomeView.swift'), 'no colour literal in HomeView');
 });
 test('react: the component\'s own source is not flagged', () => ok(!rf.some(v => v.file.includes('components/ui/')), 'components/ui produced findings'));
+test('react: an init-connected project has no small-icon rule and no lookalike rules, which a project switches on', () => {
+  appendFileSync(join(react, 'src/app/app.css'), '\n.toolbar .icon { width: 12px; }\n');
+  const after = findings(react, ['src/app/app.css']);
+  ok(!after.some(v => v.type === 'small-icon'), 'small-icon reported without iconSize');
+  ok(!rf.some(v => ['bespoke-lookalike', 'hand-copied-component'].includes(v.type)), 'a lookalike was reported with the gate off');
+});
 
 const a11y = findings(react, ['--a11y', 'src/app/a11y.tsx']).filter(v => v.type.startsWith('a11y-'));
 test('a11y: names, labels, keyboard, structure and contrast', () => {
@@ -136,6 +151,22 @@ test('report: --accept-rest moves unticked items into the baseline', () => {
   ok(run(rep, ['check', 'src']).code === 0, 'check still fails after accepting the rest');
 });
 
+test('report: the report is written and read only inside the project, a symlink out of it included', () => {
+  const outside = mkdtempSync(join(tmpdir(), 'dse-outside-'));
+  temps.push(outside);
+  symlinkSync(outside, join(rep, 'linkout'));
+  for (const out of [join(outside, 'r.md'), '../r.md', 'linkout/r.md']) {
+    const r = run(rep, ['report', '--out', out, 'src']);
+    ok(r.code === 2 && /^Refused: .* is outside the project \(.*\)\. The report is written and read only inside it\./.test(r.err), `${out}: exit ${r.code}: ${r.err}`);
+  }
+  ok(!existsSync(join(outside, 'r.md')), 'a report was written outside the project');
+  const applied = run(rep, ['apply', '--report', 'linkout/r.md']);
+  ok(applied.code === 2 && /Refused: linkout\/r\.md is outside the project/.test(applied.err), `apply: exit ${applied.code}: ${applied.err}`);
+  // The GitHub Action's job summary writes its report here.
+  const action = run(rep, ['report', '--out', '.ds-enforcer/pr-report.md', 'src']);
+  ok(action.code === 0 && existsSync(join(rep, '.ds-enforcer/pr-report.md')), `the action's report: exit ${action.code}: ${action.err}`);
+});
+
 test('stop hook: shows the report for this session\'s edits, then stays quiet until it changes', () => {
   appendFileSync(join(rep, 'src/app/page.tsx'), '\nexport const Late = () => <p className="text-[#123456] m-[7px]">late</p>;\n');
   const hookIn = (extra) => JSON.stringify({ session_id: 'sess-1', cwd: rep, ...extra });
@@ -180,6 +211,77 @@ test('svelte: markup, inline style and <style> checks', () => {
   has(sf, v => v.type === 'hardcoded-color' && v.match === '#111827', 'no colour in <style>');
 });
 
+// ─── Kit: a PHP-helper design system configured by hand ───
+const kit = project('kit');
+const kf = findings(kit, ['--all']);
+const kitHas = (type, pred, msg) => has(kf, v => v.type === type && pred(v), msg);
+test('kit: raw markup names the project\'s helper', () => {
+  kitHas('raw-control', v => v.file === 'pages/sampler.php' && v.suggestion.startsWith('Use kit_button($text, $options), or kit_icon_button()'), 'no raw <button> -> kit_button');
+  kitHas('legacy-class', v => v.suggestion.startsWith('Use kit_modal() instead.'), 'no .modal-overlay -> kit_modal');
+  kitHas('option-value', v => v.message === 'Warning: kit_badge() has no variant "shiny"', 'no unknown variant warning');
+});
+test('kit: the lookalike rules run with the gate on, in the project\'s names', () => {
+  kitHas('hand-copied-component', v => v.match === 'kit-btn' && v.suggestion === 'Use kit_button()', 'no hand-copied kit-btn');
+  kitHas('bespoke-lookalike', v => v.match === 'status-badge' && v.file === 'pages/sampler.php', 'no bespoke status-badge');
+});
+test('kit: the house rules and the small-icon rule speak in the project\'s words', () => {
+  kitHas('small-icon', v => v.message === 'Icon glyph drawn at 14px by an inline style; an icon is at least 24px (STYLE.md §3)', 'no inline glyph finding');
+  kitHas('small-icon', v => v.file === 'css/site.css' && v.suggestion === 'Use var(--glyph-lg) or larger; a size that follows its text: max(var(--glyph-lg), 1em)', 'no stylesheet glyph finding');
+  kitHas('hardcoded-font-size', v => /under an 87\.5% root/.test(v.suggestion), 'no font-size advice under the 14px root');
+  kitHas('hardcoded-color', v => v.suggestion === 'Use var(--brand-ink) instead', 'colorOrder did not pick --brand-ink over --old-ink');
+});
+test('kit: the baseline holds the old page, and the native apps are clean', () => {
+  const r = run(kit, ['check', '--fail-on', 'never', 'internal', 'apps']);
+  ok(r.code === 0 && /0 new findings/.test(r.out) && /1 existing in the baseline/.test(r.out), r.out + r.err);
+});
+test('kit: check --commit fails on a new finding, and a lookalike in JavaScript only informs', () => {
+  writeFileSync(join(kit, 'js/new.js'), "el.innerHTML = '<span class=\"status-badge\">x</span>';\n");
+  const js = run(kit, ['check', '--commit', '--fail-on', 'medium', 'js/new.js']);
+  ok(js.code === 0 && js.out.includes('(information, not blocking)'), `js: exit ${js.code}: ${js.out}`);
+  const php = run(kit, ['check', '--commit', '--fail-on', 'medium', 'pages/sampler.php']);
+  ok(php.code === 1, `php: exit ${php.code}`);
+});
+test('kit: the gate refuses an unconsulted write that adds markup, and lets the second agent tool call through only after a consult', () => {
+  const state = mkdtempSync(join(tmpdir(), 'dse-kit-state-'));
+  temps.push(state);
+  const hook = (cmd, payload) => spawnSync(process.execPath, [BIN, cmd], { cwd: kit, encoding: 'utf8', env: { ...env, CLAUDE_PROJECT_DIR: kit, DS_ENFORCER_STATE_DIR: state }, input: JSON.stringify({ session_id: 'kit-e2e', cwd: kit, ...payload }) });
+  const write = { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: join(kit, 'pages/new.php'), content: '<span class="status-badge">x</span>' } };
+  const denied = hook('gate', write);
+  ok(denied.status === 0 && JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision === 'deny', `not denied: ${denied.stdout}${denied.stderr}`);
+  const consult = run(kit, ['consult', '--file', 'pages/new.php', '--piece', 'a status label on each row']);
+  ok(consult.code === 0 && consult.out.includes('- kit_badge'), consult.out + consult.err);
+  hook('gate-post', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: `node ${BIN} consult --file pages/new.php --piece "a status label on each row"` }, tool_response: { stdout: consult.out, stderr: '' } });
+  const allowed = hook('gate', write);
+  ok(allowed.status === 0 && allowed.stdout === '', `not allowed after the consult: ${allowed.stdout}${allowed.stderr}`);
+});
+
+test('config: a config beside a copy of the enforcer applies only inside the repository its projectRoot names', () => {
+  // The enforcer at <top>/vendor/tools/enforcer, with a config beside it naming <top> as its project.
+  const top = realpathSync(mkdtempSync(join(tmpdir(), 'dse-beside-')));
+  temps.push(top);
+  const copy = join(top, 'vendor/tools/enforcer');
+  cpSync(ROOT, copy, { recursive: true, filter: src => !/[/\\](node_modules|test|tests|docs|\.git)$/.test(src) });
+  const kitConfig = JSON.parse(readFileSync(join(FIXTURES, 'kit/enforcer.config.json'), 'utf8'));
+  writeFileSync(join(copy, 'enforcer.config.json'), JSON.stringify({ ...kitConfig, projectRoot: '../../..' }));
+  cpSync(join(FIXTURES, 'kit'), top, { recursive: true });
+  rmSync(join(top, 'enforcer.config.json'));
+  const check = cwd => spawnSync(process.execPath, [join(copy, 'bin/ds-enforcer.mjs'), 'check', '--fail-on', 'never'], { cwd, env, encoding: 'utf8' });
+  // <top> is no repository, only a folder above a copy of the enforcer: the config grades nothing there.
+  const none = check(join(top, 'pages'));
+  ok(none.status === 2 && /not connected/.test(none.stderr), `exit ${none.status}: ${none.stdout}${none.stderr}`);
+  // A repository (its .git is all that is looked for): the config beside the enforcer is the project's.
+  mkdirSync(join(top, '.git'));
+  const connected = check(join(top, 'pages'));
+  ok(connected.status === 0 && /files checked/.test(connected.stdout), `exit ${connected.status}: ${connected.stdout}${connected.stderr}`);
+  // Its token file gone (a sync tool's renamed copy, a checkout under way): still the project's config,
+  // and check says what did not load rather than call the project unconnected.
+  cpSync(join(top, 'ds/tokens.css'), join(top, 'ds/tokens 2.css'));
+  rmSync(join(top, 'ds/tokens.css'));
+  const missing = check(join(top, 'pages'));
+  ok(missing.status === 2 && /enforcer\.config\.json describes did not load: ENOENT.*ds\/tokens\.css/.test(missing.stderr) && !/not connected/.test(missing.stderr),
+    `exit ${missing.status}: ${missing.stdout}${missing.stderr}`);
+});
+
 // ─── Safety and the MCP server ───
 test('check: an unconnected project exits 2', () => {
   const empty = mkdtempSync(join(tmpdir(), 'dse-empty-'));
@@ -187,21 +289,102 @@ test('check: an unconnected project exits 2', () => {
   ok(run(empty, ['check']).code === 2, 'expected exit 2');
 });
 
+/* An MCP session against a project: { init, tools, call(name, args), close }. */
+async function mcpSession(cwd, { server = join(ROOT, 'index.js') } = {}) {
+  const p = spawn(process.execPath, [server], { cwd, env: { ...env, CLAUDE_PROJECT_DIR: cwd }, stdio: ['pipe', 'pipe', 'pipe'] });
+  let buf = '', err = ''; const waiting = new Map(); let id = 0;
+  p.stdout.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); try { const m = JSON.parse(line); waiting.get(m.id)?.(m); } catch {} } });
+  p.stderr.on('data', d => { err += d; });
+  const req = (method, params) => new Promise(r => { const n = ++id; waiting.set(n, r); p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: n, method, params }) + '\n'); });
+  const init = (await req('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } })).result;
+  p.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+  const tools = (await req('tools/list', {})).result.tools;
+  return { init, tools, stderr: () => err, call: async (name, args) => (await req('tools/call', { name, arguments: args })).result, close: () => p.kill() };
+}
+
 async function mcp() {
   if (!existsSync(join(ROOT, 'node_modules', '@modelcontextprotocol'))) { console.log('SKIP  mcp: run npm install to test the server'); return; }
-  const p = spawn(process.execPath, [join(ROOT, 'index.js')], { cwd: react, env: { ...env, CLAUDE_PROJECT_DIR: react }, stdio: ['pipe', 'pipe', 'pipe'] });
-  let buf = ''; const waiting = new Map(); let id = 0;
-  p.stdout.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); try { const m = JSON.parse(line); waiting.get(m.id)?.(m); } catch {} } });
-  const call = (method, params) => new Promise(r => { const n = ++id; waiting.set(n, r); p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: n, method, params }) + '\n'); });
-  await call('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
-  p.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-  const tools = (await call('tools/list', {})).result.tools.map(t => t.name);
+  const s = await mcpSession(react);
+  const tools = s.tools.map(t => t.name);
   test('mcp: all twelve tools are listed', () => ok(['init', 'suggest_component', 'list_components', 'list_tokens', 'validate_file', 'check_snippet', 'audit_page', 'fix_file', 'a11y_review', 'native_apps', 'report', 'apply_report'].every(t => tools.includes(t)), `tools: ${tools.join(', ')}`));
-  const outside = await call('tools/call', { name: 'fix_file', arguments: { file_path: '/etc/hosts', dry_run: true } });
-  test('mcp: file tools refuse paths outside the project', () => ok(outside.result.isError && /outside the project/.test(outside.result.content[0].text), outside.result.content[0].text));
-  const pairs = await call('tools/call', { name: 'a11y_review', arguments: { tokens: true } });
-  test('mcp: a11y_review audits colour pairs', () => ok(/Colour pairs in the design system/.test(pairs.result.content[0].text), 'no pair audit'));
-  p.kill();
+  test('mcp: the component gate\'s tools are not listed where the gate is off', () => ok(!tools.some(t => ['consult_ui', 'record_case', 'scan_components', 'apply_review'].includes(t)), `tools: ${tools.join(', ')}`));
+  test('mcp: the server reports the package version and the generic instructions', () => {
+    ok(s.init.serverInfo.version === VERSION, `version ${s.init.serverInfo.version}, package ${VERSION}`);
+    ok(s.init.serverInfo.name === 'design-system-enforcer', s.init.serverInfo.name);
+    ok(/^Design system enforcer\. Before writing UI, find what exists/.test(s.init.instructions), s.init.instructions);
+  });
+  const outside = await s.call('fix_file', { file_path: '/etc/hosts', dry_run: true });
+  test('mcp: file tools refuse paths outside the project', () => ok(outside.isError && /outside the project/.test(outside.content[0].text), outside.content[0].text));
+  // fix_file writes: a path inside the project that a symlink leads out of is refused, and nothing outside changes.
+  const away = mkdtempSync(join(tmpdir(), 'dse-away-'));
+  temps.push(away);
+  writeFileSync(join(away, 'x.css'), '.a { color: #7C3AED; }\n');
+  symlinkSync(away, join(react, 'linked'));
+  writeFileSync(join(react, 'src/app/fixme.css'), '.a { color: #7C3AED; }\n');
+  const linked = await s.call('fix_file', { file_path: 'linked/x.css' });
+  const fixedInside = await s.call('fix_file', { file_path: 'src/app/fixme.css' });
+  test('mcp: fix_file refuses a path a symlink leads out of the project, and fixes one inside', () => {
+    ok(linked.isError && /^Error: Refused: linked\/x\.css is outside the project/.test(linked.content[0].text), linked.content[0].text);
+    ok(readFileSync(join(away, 'x.css'), 'utf8') === '.a { color: #7C3AED; }\n', 'the file outside the project was changed');
+    ok(!fixedInside.isError && readFileSync(join(react, 'src/app/fixme.css'), 'utf8').includes('var(--color-brand)'), fixedInside.content[0].text);
+  });
+  const pairs = await s.call('a11y_review', { tokens: true });
+  test('mcp: a11y_review audits colour pairs', () => ok(/Colour pairs in the design system/.test(pairs.content[0].text), 'no pair audit'));
+  const report = await s.call('report', { out: '../elsewhere.md' });
+  test('mcp: the report tool refuses a report path outside the project', () => ok(report.isError && /Refused: \.\.\/elsewhere\.md is outside the project/.test(report.content[0].text), report.content[0].text));
+  s.close();
+
+  const k = await mcpSession(kit);
+  const byName = Object.fromEntries(k.tools.map(t => [t.name, t]));
+  test('mcp kit: the gate\'s tools are listed, their shell lines name the enforcer by its full path from outside the project', () => {
+    ok(k.tools.length === 16, `tools: ${k.tools.map(t => t.name).join(', ')}`);
+    ok(byName.consult_ui.description.includes(`Shell equivalent: node ${BIN} consult --file <path>`), byName.consult_ui.description);
+    ok(byName.record_case.description.includes('Only for a .php or .css file the gate covers (lookalikes in .js and .html files are only reported).'), byName.record_case.description);
+    ok(byName.record_case.description.includes('The case waits for Rae on the review page'), byName.record_case.description);
+    ok(byName.consult_ui.inputSchema.properties.file.description === 'Project-relative path of the file you are about to change, e.g. pages/team.php', byName.consult_ui.inputSchema.properties.file.description);
+    ok(byName.list_tokens.description === 'List the kit fixture\'s tokens from ds/tokens.css.', byName.list_tokens.description);
+  });
+  test('mcp kit: the server is named for the project and speaks its instructions', () => {
+    ok(k.init.serverInfo.name === 'kit-design-system-enforcer' && k.init.serverInfo.version === VERSION, JSON.stringify(k.init.serverInfo));
+    ok(k.init.instructions.startsWith('Kit design system enforcer. Kit fixture: find the kit_* helper') && k.init.instructions.endsWith('The contract: ds/GUIDE.md (web) and ds/NATIVE.md (native).'), k.init.instructions);
+  });
+  const colors = (await k.call('list_tokens', { category: 'colors' })).content[0].text;
+  test('mcp kit: list_tokens files the project\'s own colour names under colours (tokenNames.colorWords)', () => ok(colors.includes('`--shop-hue-1`') && colors.includes('`--color-ink`') && !colors.includes('`--space-4`'), colors));
+  const apps = (await k.call('native_apps', { app: 'pocket' })).content[0].text;
+  test('mcp kit: native_apps shows the app, its commands and its live check', () => ok(apps.startsWith('## Pocket (pocket)') && apps.includes('xcodebuild -project apps/pocket/Pocket.xcodeproj -scheme Pocket') && apps.includes('Native check, live (0 findings, 0 new against the baseline)'), apps));
+  k.close();
+
+  // The enforcer inside the project it serves: the shell lines name it by its path from the project root.
+  const inside = project('kit');
+  cpSync(ROOT, join(inside, 'tools/ds-enforcer'), { recursive: true, filter: src => !/[/\\](node_modules|test|tests|docs|\.git)$/.test(src) });
+  symlinkSync(join(ROOT, 'node_modules'), join(inside, 'tools/ds-enforcer/node_modules'), 'dir');
+  const ownSession = await mcpSession(inside, { server: join(inside, 'tools/ds-enforcer/index.js') });
+  const own = ownSession.tools;
+  ownSession.close();
+  // Installed as a dependency (npm install github:…): the package under the project's node_modules, its own
+  // dependency hoisted beside it, and no lockfile in the package. The server starts without installing anything.
+  const app = realpathSync(mkdtempSync(join(tmpdir(), 'dse-installed-')));
+  temps.push(app);
+  const pkg = join(app, 'node_modules/design-system-enforcer');
+  cpSync(ROOT, pkg, { recursive: true, filter: src => !/[/\\](node_modules|test|tests|docs|\.git|enforcer\.config\.json|package-lock\.json)$/.test(src) });
+  symlinkSync(realpathSync(join(ROOT, 'node_modules/@modelcontextprotocol')), join(app, 'node_modules/@modelcontextprotocol'), 'dir');
+  const installed = await mcpSession(app, { server: join(pkg, 'bin/ds-enforcer.mjs') });
+  installed.close();
+  test('bin: an install that hoists the SDK into the project starts the server without installing anything', () => {
+    ok(installed.init?.serverInfo?.name === 'design-system-enforcer' && installed.init.serverInfo.version === VERSION, JSON.stringify(installed.init));
+    ok(!/installing|npm ci/.test(installed.stderr()), installed.stderr());
+    ok(!existsSync(join(pkg, 'node_modules')), 'it made the package a node_modules of its own');
+  });
+  const plugin = JSON.parse(readFileSync(join(ROOT, '.claude-plugin/plugin.json'), 'utf8'));
+  test('plugin: the server starts through bin/ds-enforcer.mjs, so a plugin install gets the same dependency check', () => {
+    ok(JSON.stringify(plugin.mcpServers['design-system-enforcer'].args) === JSON.stringify(['${CLAUDE_PLUGIN_ROOT}/bin/ds-enforcer.mjs']), JSON.stringify(plugin.mcpServers));
+    ok(plugin.version === VERSION, `plugin ${plugin.version}, package ${VERSION}`);
+  });
+
+  test('mcp kit: an enforcer inside the project names its command by its path from the project root', () => {
+    const consult = own.find(t => t.name === 'consult_ui')?.description || '';
+    ok(consult.includes('Shell equivalent: node tools/ds-enforcer/bin/ds-enforcer.mjs consult --file <path>'), consult);
+  });
 }
 
 await mcp();

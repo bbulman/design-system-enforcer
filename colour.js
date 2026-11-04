@@ -96,6 +96,12 @@ export function nearestColorToken(tokenParser, value) {
   return { name: tokenParser.pickBestColorToken(best.names), names: best.names, hex: best.hex, distance: best.distance };
 }
 
+/** The plainest of several colour token names: --foreground before --card-foreground, then the shortest. */
+export function plainestColorToken(names) {
+  const canonical = n => (/^--(color-)?(background|foreground|primary|border)$/.test(n) ? 0 : 1);
+  return [...names].sort((a, b) => canonical(a) - canonical(b) || a.length - b.length || a.localeCompare(b))[0];
+}
+
 /** WCAG 2.x contrast ratio between two opaque colours (1 to 21). */
 export function contrast(a, b) {
   const lum = ({ r, g, b: bl }) => {

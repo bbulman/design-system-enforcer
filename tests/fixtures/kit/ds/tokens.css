@@ -1,0 +1,60 @@
+/* Kit: a small, made-up design system for the enforcer's tests. 1rem paints 14px here (rootPx 14). */
+:root {
+  /* Brand */
+  --brand: #C2410C;
+  --brand-ink: #9A3412;
+  --brand-soft: #FFEDD5;
+  --brand-tint: #EAE1E0;
+
+  /* Neutrals */
+  --color-ink: #1F2937;
+  --ink-1: #1F2937;
+  --bg-page: #FAF7F2;
+  --bg-surface: #FFFDF9;
+  --gray-200: #E0E0EA;
+  --gray-500: #6B7280;
+  --gray-900: #111827;
+  --overlay-medium: rgba(255, 255, 255, 0.85);
+
+  /* Status */
+  --color-success: #15803D;
+  --color-error: #B91C1C;
+
+  /* Another app's own colours, never offered to a native app */
+  --promo-red: #C2410C;
+  --promo-glow: #E1E1E1;
+  --shop-hue-1: #2563EB;
+
+  /* A legacy alias */
+  --old-ink: #9A3412;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.08);
+
+  /* Type */
+  --font-heading: 'Kitserif', Georgia, serif;
+  --font-body: 'Kitsans', system-ui, sans-serif;
+  --text-small: 0.875rem;
+  --text-body: 1rem;
+  --text-large: 1.25rem;
+
+  /* Icon sizes: an icon is at least --glyph-lg */
+  --glyph-sm: 16px;
+  --glyph-md: 20px;
+  --glyph-lg: 24px;
+  --glyph-xl: 32px;
+}

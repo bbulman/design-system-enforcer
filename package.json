@@ -1,7 +1,7 @@
 {
   "name": "design-system-enforcer",
-  "version": "1.3.0",
-  "description": "Keeps AI coding agents inside your design system: an MCP server and CLI that reads your tokens and components, tells the agent what exists, and checks what it wrote (Tailwind, React, Vue, Svelte, CSS, SwiftUI, Figma variables, accessibility).",
+  "version": "1.4.0",
+  "description": "MCP server, command line and Claude Code hooks that hold code to a project's own design system: its tokens, components and patterns",
   "type": "module",
   "main": "index.js",
   "bin": {
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "test": "node tests/run.mjs",
+    "test": "node self-test.js && node --test test/*.test.mjs && node tests/run.mjs",
     "init": "node bin/ds-enforcer.mjs init",
     "sync": "node bin/ds-enforcer.mjs sync",
     "check": "node bin/ds-enforcer.mjs check"
@@ -44,7 +44,9 @@
   "files": [
     "*.js",
     "*.mjs",
+    "!self-test.js",
     "bin/",
+    "gate/",
     "init/",
     "data/",
     "hooks/",
