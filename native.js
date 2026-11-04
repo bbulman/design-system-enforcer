@@ -1,9 +1,9 @@
 /**
- * Native apps: the `native` block of design-system/workshopr-design-system.json,
+ * Native apps: the `native` block of the manifest (config nativeManifest),
  * each app's theme constants, and the web token each constant mirrors.
  *
- * A web token's value comes from the catalog (components.generated.json,
- * tokens[name].resolved ?? value), never from platform-tokens.css: the CSS
+ * A web token's value comes from the catalog (config catalog,
+ * tokens[name].resolved ?? value), never from the token CSS: the CSS
  * redeclares some tokens under @media (prefers-contrast: more), so its last
  * declaration is not the root value.
  *
@@ -13,7 +13,7 @@
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { resolve, relative, isAbsolute, sep } from 'path';
 
-import { PROJECT_ROOT, config, projectPath } from './config.js';
+import { PROJECT_ROOT, config, projectPath, tokenNamePatterns } from './config.js';
 export { PROJECT_ROOT };
 /* Read per call: init can connect a project after the server started. No manifest means no native apps. */
 const MANIFEST = () => (config.nativeManifest ? projectPath(config.nativeManifest) : null);
@@ -316,18 +316,20 @@ export function describeStops(stops, alphaKey = 'alpha') {
   return stops.map(s => (s[alphaKey] !== undefined && s[alphaKey] < 1 ? `${s.hex} at ${pct(s[alphaKey])}` : s.hex)).join(' to ');
 }
 
-const APP_PREFIX = /^--(coach|tips|podcasts|planner|mainsite|dna|training|phase|intervention|strategist|synth|sidekick|academy|prove|reflect|facilitat|companion)/;
-const CORE_PREFIX = /^--(brand|text-|bg-|color-|gray-|border)/;
+/* A token one app owns (config tokenNames.appScoped): never offered to a native app, and ranked after the rest. */
+const appScoped = n => tokenNamePatterns('appScoped').some(re => re.test(n));
+/* The core token families (config tokenNames.nativeCore), named before the rest of a tier. */
+const core = n => tokenNamePatterns('nativeCore').some(re => re.test(n));
 const TIER_RANK = { brand: 0, semantic: 1, primitive: 2, alias: 3 };
-const tokenRank = (n, native) => [TIER_RANK[native.tokens.get(n)?.tier] ?? 2, APP_PREFIX.test(n) ? 1 : 0, CORE_PREFIX.test(n) ? 0 : 1, n.length];
+const tokenRank = (n, native) => [TIER_RANK[native.tokens.get(n)?.tier] ?? 2, appScoped(n) ? 1 : 0, core(n) ? 0 : 1, n.length];
 const compareRanks = (ra, rb) => {
   for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i] - rb[i];
   return 0;
 };
 
 /**
- * The token to name for a value several tokens share: brand first, then the
- * text / bg / colour / grey families; legacy aliases and app-specific names last.
+ * The token to name for a value several tokens share: by tier (brand first, legacy aliases
+ * last), then the tokens no app owns, then the core families, then the shortest name.
  */
 export function preferredToken(names, native) {
   return [...names].sort((a, b) => compareRanks(tokenRank(a, native), tokenRank(b, native)) || a.localeCompare(b))[0] ?? null;
@@ -354,7 +356,7 @@ export function nearestToken(native, hex) {
   for (const [candidate, names] of native.hexTokens) {
     const [cr, cg, cb] = rgb(candidate);
     const distance = Math.sqrt((r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2);
-    for (const name of names) if (!APP_PREFIX.test(name)) candidates.push({ name, hex: candidate, distance, rank: tokenRank(name, native) });
+    for (const name of names) if (!appScoped(name)) candidates.push({ name, hex: candidate, distance, rank: tokenRank(name, native) });
   }
   if (!candidates.length) return null;
   const nearest = Math.min(...candidates.map(c => c.distance));
@@ -541,7 +543,7 @@ export function runNativeCheck(native, validate, { app = null, files = null } = 
 export const baselineKey = f => `${f.app}|${f.rule}|${f.file}|${f.match}`;
 
 export function baselinePath(native) {
-  return resolve(PROJECT_ROOT, String(native.manifest.baseline || '/design-system/native-baseline.json').replace(/^\//, ''));
+  return resolve(PROJECT_ROOT, String(native.manifest.baseline || '.ds-enforcer/native-baseline.json').replace(/^\//, ''));
 }
 
 /** The baseline's counts by key, or null when there is no baseline file. Throws when the file exists but does not parse. */

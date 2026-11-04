@@ -28,6 +28,12 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { config, projectPath } from './config.js';
 
+/* A component's name without the project's helper prefix (components.functionPrefix): ws_listing_card is "listing_card". */
+const unprefixed = name => {
+    const prefix = config.components?.functionPrefix;
+    return prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name;
+};
+
 export function loadCatalog() {
     const catalog = JSON.parse(readFileSync(projectPath(config.catalog), 'utf8'));
     const synPath = config.synonyms && projectPath(config.synonyms);
@@ -93,7 +99,7 @@ export function rankComponents(query, { catalog, synonyms }, limit = 5) {
     const phraseWords = new Set(words(q, PHRASE_KEEP));
     const out = [];
     for (const [name, c] of Object.entries(catalog.components)) {
-        const title = words(name.replace(/^ws_/, '').replaceAll('_', ' '));
+        const title = words(unprefixed(name).replaceAll('_', ' '));
         let score = name === q ? 100 : 0;
         const phrase = phraseScore(synonyms.components?.[name], phraseWords);
         score += phrase;
@@ -140,7 +146,7 @@ function componentHeads(catalog) {
     const heads = new Set();
     for (const [name, c] of Object.entries(catalog?.components || {})) {
         if (c.scope === 'app-local') continue;
-        const parts = name.replace(/^ws_/, '').replace(/_(start|end)$/, '').split('_');
+        const parts = unprefixed(name).replace(/_(start|end)$/, '').split('_');
         heads.add(stem(parts[parts.length - 1]));
     }
     return heads;

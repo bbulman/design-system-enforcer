@@ -1,0 +1,3 @@
+.kit-btn { padding: var(--space-2) var(--space-4); border-radius: var(--radius-sm); background: var(--brand); color: var(--bg-surface); }
+.kit-badge { padding: 0 var(--space-2); border-radius: var(--radius-full); }
+.kit-icon-btn .glyphs-outlined { font-size: var(--glyph-lg); }

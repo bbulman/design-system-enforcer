@@ -2,9 +2,12 @@
  * Validators: scan CSS, PHP, JS and Swift files for design system violations.
  * Each validator returns an array of violation objects.
  */
-import { config, rawControlSkip } from './config.js';
+import { findSmallIcons } from './icon-size.js';
+import { config, rawControlSkip, fillText, escapeRe } from './config.js';
 import { checkTailwind, tailwindVersion } from './tailwind.js';
-import { nearestColorToken, closeness } from './colour.js';
+import { nearestColorToken, closeness, plainestColorToken } from './colour.js';
+import { gateSettings } from './gate/settings.mjs';
+import { componentRootMap, findBespokeLookalikes, findHandCopied } from './gate/lookalikes.mjs';
 
 /* var(--x), or hsl(var(--x)) for a token holding bare HSL channels (shadcn). */
 const tokenRef = (tokenParser, name) => (tokenParser.info?.get(name)?.channels ? `hsl(var(${name}))` : `var(${name})`);
@@ -13,9 +16,8 @@ const tokenRef = (tokenParser, name) => (tokenParser.info?.get(name)?.channels ?
 function nearestAdvice(tokenParser, value) {
   const near = nearestColorToken(tokenParser, value);
   if (!near) return 'No colour token exists yet: add one to the design system';
-  // Of tokens sharing the colour, the plainest name: --foreground before --card-foreground.
-  const name = config.framework === 'php' ? near.name
-    : [...near.names].sort((a, b) => (/^--(color-)?(background|foreground|primary|border)$/.test(a) ? 0 : 1) - (/^--(color-)?(background|foreground|primary|border)$/.test(b) ? 0 : 1) || a.length - b.length || a.localeCompare(b))[0];
+  // Of tokens sharing the colour, the parser's pick (colorTokenChoice "semantic") or the plainest name: --foreground before --card-foreground.
+  const name = config.colorTokenChoice === 'semantic' ? near.name : plainestColorToken(near.names);
   return `No token has exactly this value. Nearest: ${tokenRef(tokenParser, name)} (${near.hex}), ${closeness(near.distance)}`;
 }
 
@@ -29,6 +31,45 @@ function spacingFallback(tokenParser, px) {
       : `Use a Tailwind spacing class instead of a raw value (nearest step: ${step}, ${step * 4}px, e.g. p-${step})`;
   }
   return 'The design system has no spacing tokens yet: add a spacing scale and use it here';
+}
+
+/* "a, b or c" */
+const orList = list => (list.length > 1 ? `${list.slice(0, -1).join(', ')} or ${list.at(-1)}` : list.join(''));
+
+/* The advice below names the project's own scales: its tokens, and what 1rem paints (config rootPx). */
+
+/** The radius tokens' steps in px, a pill radius as "full": "4 / 8 / full". */
+const radiusScale = tokenParser => [...(tokenParser.radiusToToken?.keys() || [])].sort((a, b) => a - b)
+  .map(px => (px >= 999 ? 'full' : String(px))).join(' / ');
+
+/** The shadow tokens to use for a hand-written box-shadow: var(--shadow-sm|md), from the --shadow-* tokens. */
+function shadowAdvice(tokenParser) {
+  const names = [...(tokenParser.tokens?.keys() || [])].filter(n => n.startsWith('--shadow-'));
+  if (!names.length) return 'The design system has no shadow tokens yet: add them and use one here';
+  return names.length === 1 ? `Use var(${names[0]}) instead` : `Use var(--shadow-${names.map(n => n.slice('--shadow-'.length)).join('|')}) instead`;
+}
+
+const GENERIC_FAMILY = /(?:^|,)\s*(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-serif|ui-sans-serif|ui-monospace|ui-rounded)\s*$/i;
+/** The font-family tokens to use, each by the generic family its stack ends in: var(--font-body) for sans-serif. */
+function fontFamilyAdvice(tokenParser) {
+  const stacks = [...(tokenParser.tokens || [])].map(([name, value]) => [name, GENERIC_FAMILY.exec(String(value))?.[1]]).filter(([, generic]) => generic);
+  return stacks.length ? `Use ${orList(stacks.map(([name, generic]) => `var(${name}) for ${generic.toLowerCase()}`))}`
+    : 'The design system has no font-family tokens yet: add them and use one here';
+}
+
+/** A font-size literal's advice. Under a root other than 16px a rem token paints at a fraction of its nominal size, so the advice says so. */
+function fontSizeAdvice(sizeToken) {
+  const root = Number(config.rootPx) || 16;
+  if (root === 16) {
+    return sizeToken ? `var(${sizeToken}) is this exact size; check its name fits the role before swapping`
+      : 'No token has this size. Decide the scale, do not find-and-replace.';
+  }
+  const pct = +(root / 16 * 100).toFixed(2);
+  const factor = +(root / 16).toFixed(3);
+  const an = /^(8|11(\D|$)|18(\D|$))/.test(String(pct)) ? 'an' : 'a';
+  return sizeToken
+    ? `var(${sizeToken}) paints this exact size — but check its NAME fits the role before swapping; the scale is rem under ${an} ${pct}% root, so nominal and painted sizes differ`
+    : `No token paints this size. html{font-size:${pct}%} makes every rem token render at ${factor}x nominal, so a px literal is rarely equal to the token that shares its nominal value. Decide the scale, do not find-and-replace.`;
 }
 
 /** The spacing token nearest a px value, as advice, or null when the system has none. */
@@ -171,9 +212,7 @@ export function validateCSS(content, filePath, tokenParser) {
             message: `Hardcoded color ${hex}`,
             suggestion: bestToken
               ? `Use var(${bestToken}) instead`
-              : config.framework === 'php'
-                ? `No matching token found — add to platform-tokens.css or use existing semantic token`
-                : nearestAdvice(tokenParser, hex),
+              : config.text.noColorToken || nearestAdvice(tokenParser, hex),
             autoFixable: !!bestToken,
             fix: bestToken ? { from: hex, to: `var(${bestToken})` } : null,
             file: filePath,
@@ -230,7 +269,7 @@ export function validateCSS(content, filePath, tokenParser) {
               type: 'hardcoded-spacing', severity: 'medium', line: lineNum, column,
               match: `${px}px`,
               message: `Hardcoded spacing ${px}px — not in spacing scale`,
-              suggestion: config.framework === 'php' ? `Use nearest token from spacing scale (4px base)` : spacingFallback(tokenParser, px),
+              suggestion: config.text.spacingOffScale || spacingFallback(tokenParser, px),
               autoFixable: false,
               file: filePath,
             });
@@ -261,8 +300,8 @@ export function validateCSS(content, filePath, tokenParser) {
             violations.push({
               type: 'hardcoded-radius', severity: 'low', line: lineNum, column,
               match: `${px}px`,
-              message: `Radius ${px}px is not on the radius scale (4 / 6 / 8 / 12 / 16 / full)`,
-              suggestion: `Round to the nearest step, or add a token if this radius is deliberate`,
+              message: radiusScale(tokenParser) ? `Radius ${px}px is not on the radius scale (${radiusScale(tokenParser)})` : `Radius ${px}px: the design system has no radius tokens yet`,
+              suggestion: radiusScale(tokenParser) ? `Round to the nearest step, or add a token if this radius is deliberate` : 'Add a radius scale and use it here',
               autoFixable: false,
               file: filePath,
             });
@@ -287,9 +326,7 @@ export function validateCSS(content, filePath, tokenParser) {
             column,
             match: remMatch ? `${remMatch[1]}rem` : `${pxMatch[1]}px`,
             message: `Hardcoded font-size ${remMatch ? remMatch[1] + 'rem' : pxMatch[1] + 'px'} — use type scale token`,
-            suggestion: sizeToken
-              ? `var(${sizeToken}) paints this exact size — but check its NAME fits the role before swapping; the scale is rem under an 80% root, so nominal and painted sizes differ`
-              : `No token paints this size. html{font-size:80%} makes every rem token render at 0.8x nominal, so a px literal is rarely equal to the token that shares its nominal value. Decide the scale, do not find-and-replace.`,
+            suggestion: fontSizeAdvice(sizeToken),
             autoFixable: !!sizeToken,
             fix: sizeToken ? { from: remMatch ? `${remMatch[1]}rem` : `${pxMatch[1]}px`, to: `var(${sizeToken})` } : null,
             file: filePath,
@@ -305,7 +342,7 @@ export function validateCSS(content, filePath, tokenParser) {
             type: 'hardcoded-shadow', severity: 'low', line: lineNum, column,
             match: decl.substring(0, 60),
             message: 'Hardcoded box-shadow',
-            suggestion: 'Use var(--shadow-xs|sm|md|lg|xl) instead',
+            suggestion: shadowAdvice(tokenParser),
             autoFixable: false,
             file: filePath,
           });
@@ -318,7 +355,7 @@ export function validateCSS(content, filePath, tokenParser) {
           type: 'hardcoded-font-family', severity: 'medium', line: lineNum, column,
           match: decl.substring(0, 60),
           message: 'Hardcoded font-family',
-          suggestion: 'Use var(--font-heading) for serif or var(--font-body) for sans-serif',
+          suggestion: fontFamilyAdvice(tokenParser),
           autoFixable: false,
           file: filePath,
         });
@@ -360,24 +397,26 @@ export function validateCSS(content, filePath, tokenParser) {
 
 /** The helper that renders a raw control, named from the catalog so it never offers an option the helper lacks. */
 function rawControlSuggestion(tag, type, registry) {
+  const fp = config.components.functionPrefix;
+  const n = concept => `${fp}${concept}`;
   const has = name => registry?.components?.has(name);
   const call = name => `${name}(${(registry?.components?.get(name)?.params || []).map(p => (/\$\w+/.exec(p) || [''])[0]).join(', ')})`;
-  const inputTypes = registry?.components?.get('ws_input')?.optionSpec?.type?.values || [];
-  const buttonTypes = registry?.components?.get('ws_button')?.optionSpec?.type?.values || [];
-  if (tag === 'button') return `Use ${call('ws_button')}${has('ws_icon_button') ? ', or ws_icon_button() for an icon-only control' : ''}`;
-  if (tag === 'select') return `Use ${call('ws_select')}`;
+  const inputTypes = registry?.components?.get(n('input'))?.optionSpec?.type?.values || [];
+  const buttonTypes = registry?.components?.get(n('button'))?.optionSpec?.type?.values || [];
+  if (tag === 'button') return `Use ${call(n('button'))}${has(n('icon_button')) ? `, or ${n('icon_button')}() for an icon-only control` : ''}`;
+  if (tag === 'select') return `Use ${call(n('select'))}`;
   if (tag === 'textarea') {
     return inputTypes.includes('textarea')
-      ? "Use ws_input($name, ['type' => 'textarea'])"
-      : 'No ws_* helper renders a textarea; ask whether one should exist';
+      ? `Use ${n('input')}($name, ['type' => 'textarea'])`
+      : `No ${fp}* helper renders a textarea; ask whether one should exist`;
   }
-  if (buttonTypes.includes(type)) return `Use ws_button($text, ['type' => '${type}'])`;
+  if (buttonTypes.includes(type)) return `Use ${n('button')}($text, ['type' => '${type}'])`;
   if (type === 'checkbox') {
-    return `Use ${call('ws_toggle')} for an on/off setting${has('ws_checkbox_card_group') ? ', or ws_checkbox_card_group() for a set of choices' : ''}`;
+    return `Use ${call(n('toggle'))} for an on/off setting${has(n('checkbox_card_group')) ? `, or ${n('checkbox_card_group')}() for a set of choices` : ''}`;
   }
-  if (type === 'radio' && has('ws_radio_card_group')) return `Use ${call('ws_radio_card_group')}`;
-  if (inputTypes.includes(type)) return type === 'text' ? 'Use ws_input($name, $options)' : `Use ws_input($name, ['type' => '${type}'])`;
-  return `No ws_* helper renders <input type="${type}">; ask whether one should exist`;
+  if (type === 'radio' && has(n('radio_card_group'))) return `Use ${call(n('radio_card_group'))}`;
+  if (inputTypes.includes(type)) return type === 'text' ? `Use ${n('input')}($name, $options)` : `Use ${n('input')}($name, ['type' => '${type}'])`;
+  return `No ${fp}* helper renders <input type="${type}">; ask whether one should exist`;
 }
 
 /**
@@ -397,7 +436,7 @@ function findRawControls(content, filePath, registry) {
     tag,
     line: lineOf(index),
     match: text.replace(/\s+/g, ' ').substring(0, 80),
-    message: `Raw <${tag}${tag === 'input' ? ` type="${type}"` : ''}> where a ws_* helper exists`,
+    message: `Raw <${tag}${tag === 'input' ? ` type="${type}"` : ''}> where a ${config.components.functionPrefix}* helper exists`,
     suggestion: rawControlSuggestion(tag, type, registry),
     autoFixable: false,
     file: filePath,
@@ -409,6 +448,20 @@ function findRawControls(content, filePath, registry) {
     add(m.index, 'input', type, m[0]);
   }
   return violations;
+}
+
+/**
+ * The widened lookalike rules, only with the component gate on, so other projects see no change,
+ * and never in a file componentGate.skip names (email templates, tests, design-system demos).
+ */
+function findLookalikes(content, filePath) {
+  const gate = gateSettings();
+  if (!gate.enabled) return [];
+  const rel = relPath(filePath);
+  if (gate.skip.some(re => re.test(rel))) return [];
+  const suppressed = buildSuppressions(content.split('\n'));
+  return [...findBespokeLookalikes(content, filePath), ...findHandCopied(content, filePath, componentRootMap())]
+    .filter(v => !suppressed.has(v.line));
 }
 
 /**
@@ -438,13 +491,16 @@ export function validatePHP(content, filePath, tokenParser, componentRegistry) {
   }
   violations.push(...findLegacyTokenViolations(content, filePath, tokenParser));
 
-  // 2c. Raw controls, check-page.php's raw-component rule (3).
+  // 2c. Raw controls, check-page.php's raw-component rule (3), for a project whose helpers have a prefix to name them by.
   const rel = relPath(filePath);
-  if (!rawControlSkip().some(p => p.test(rel))) {
+  if (config.components.functionPrefix && !rawControlSkip().some(p => p.test(rel))) {
     const btnClassLines = new Set(violations.filter(v => v.id === 'raw-button').map(v => v.line));
     violations.push(...findRawControls(content, filePath, componentRegistry)
       .filter(v => keep(v) && !(v.tag === 'button' && btnClassLines.has(v.line))));
   }
+
+  // 2d. Bespoke component names and hand-copied component markup (ws-* in Workshopr).
+  violations.push(...findLookalikes(content, filePath));
 
   // 3. Hardcoded colors in PHP (inline styles, echo'd HTML)
   lines.forEach((line, i) => {
@@ -485,9 +541,13 @@ export function validatePHP(content, filePath, tokenParser, componentRegistry) {
  */
 export function validateJS(content, filePath, tokenParser) {
   if (isExempt(filePath)) return [];
-  const violations = findLegacyTokenViolations(content, filePath, tokenParser);
+  const violations = [...findLegacyTokenViolations(content, filePath, tokenParser), ...findLookalikes(content, filePath)];
   const lines = content.split('\n');
   const suppressed = buildSuppressions(lines);
+  const classPrefix = config.components.classPrefix;
+  const classAddRe = classPrefix
+    ? new RegExp(`\\.classList\\.add\\(\\s*['"](?!${escapeRe(classPrefix)}|is-|has-)(btn|modal|card|alert|badge|tab)[-\\w]*['"]\\s*\\)`)
+    : null;
 
   lines.forEach((line, i) => {
     if (suppressed.has(i + 1)) return;
@@ -557,8 +617,8 @@ export function validateJS(content, filePath, tokenParser) {
       }
     }
 
-    // 4. Direct DOM class manipulation with non-ws- classes for UI components (Workshopr's ws-* class convention)
-    const addClassMatch = config.framework === 'php' && trimmed.match(/\.classList\.add\(\s*['"](?!ws-|is-|has-)(btn|modal|card|alert|badge|tab)[-\w]*['"]\s*\)/);
+    // 4. Direct DOM class manipulation with a component-ish class outside the project's class prefix (components.classPrefix, e.g. ws-)
+    const addClassMatch = classAddRe && trimmed.match(classAddRe);
     if (addClassMatch) {
       violations.push({
         type: 'non-ds-class-in-js',
@@ -566,7 +626,7 @@ export function validateJS(content, filePath, tokenParser) {
         line: lineNum,
         match: addClassMatch[0].substring(0, 60),
         message: `Adding non-design-system class "${addClassMatch[1]}..." via JS`,
-        suggestion: `Use ws-* prefixed classes from the component library`,
+        suggestion: `Use ${classPrefix}* prefixed classes from the component library`,
         autoFixable: false,
         file: filePath,
       });
@@ -689,18 +749,27 @@ export function validateSwift(content, filePath, tokenParser, native = getNative
   }
 
   const allowed = [...(native.manifest.brandFonts || []), ...(native.manifest.iconFonts || [])].map(fontKey);
-  const workshopr = config.framework === 'php';
-  // Other projects: pure black only as the house rule they switched on; fonts only when the manifest names brand fonts.
-  const checkBlack = workshopr || config.rules.pureBlack.enabled;
-  const checkFonts = workshopr || (native.manifest.brandFonts || []).length > 0;
-  const brandFonts = (native.manifest.brandFonts || []).join(' or ');
-  const ink = hit ? native.byHex.get(hit.key)?.get('#2C2416')?.[0]?.expr : null;
+  // Pure black only as the house rule the project switched on, for Swift (rules.pureBlack.native) or, when
+  // that is unset, as on the web; fonts only when the manifest names brand fonts.
+  const checkBlack = typeof config.rules.pureBlack.native === 'boolean' ? config.rules.pureBlack.native : config.rules.pureBlack.enabled;
+  const checkFonts = (native.manifest.brandFonts || []).length > 0;
+  // The project's own wording (text.native) where it has some, with {ink}, {brandFonts} and {iconFonts} filled in.
+  const said = config.text.native || {};
+  const inkHex = said.inkHex ? String(said.inkHex).toUpperCase() : null;
+  const ink = hit && inkHex ? native.byHex.get(hit.key)?.get(inkHex)?.[0]?.expr : null;
+  const placeholders = {
+    ink: ink ?? 'the theme\'s ink constant',
+    brandFonts: (native.manifest.brandFonts || []).join(' or '),
+    iconFonts: (native.manifest.iconFonts || []).join(', '),
+  };
+  const blackMessage = said.pureBlack || config.rules.pureBlack.message;
+  const blackFix = said.pureBlackFix ? fillText(said.pureBlackFix, placeholders) : (config.rules.pureBlack.suggestion || 'Use the theme\'s ink colour');
+  const fontFix = fillText(said.font || 'Use {brandFonts} through the theme\'s font helpers', placeholders);
+  const systemFontFix = fillText(said.systemFont || 'Use the theme\'s {brandFonts} helper; .system(size:) is for sizing an SF Symbol image', placeholders);
   lines.forEach((line, i) => {
     const bare = skelLines[i];
     if (checkBlack) for (const m of bare.matchAll(PURE_BLACK)) {
-      push(i + 1, 'native-pure-black', 'high', squash(m[0]).replace(/,$/, ')'),
-        workshopr ? 'Pure black text violates the design rules' : config.rules.pureBlack.message,
-        workshopr ? `Use ${ink ?? 'the theme\'s ink constant'} (--color-ink #2C2416), never .black` : (config.rules.pureBlack.suggestion || 'Use the theme\'s ink colour'));
+      push(i + 1, 'native-pure-black', 'high', squash(m[0]).replace(/,$/, ')'), blackMessage, blackFix);
     }
     if (!checkFonts) return;
     for (const m of line.matchAll(FONT_NAME)) {
@@ -709,13 +778,13 @@ export function validateSwift(content, filePath, tokenParser, native = getNative
       if (allowed.some(a => fontKey(m[1]).startsWith(a))) continue;
       push(i + 1, 'native-off-brand-font', 'high', squash(m[0]),
         `Font "${m[1]}" is not a brand font`,
-        workshopr ? `Use Fraunces for headlines or Inter for text (icons: ${(native.manifest.iconFonts || []).join(', ')}), through the theme's font helpers` : `Use ${brandFonts} through the theme's font helpers`);
+        fontFix);
     }
     if (bare.includes('Text(')) {
       for (const m of bare.matchAll(SYSTEM_SIZE)) {
         push(i + 1, 'native-system-font', 'medium', squash(m[0]),
           'Text set in the system font',
-          workshopr ? 'Use the theme\'s Fraunces or Inter helper; .system(size:) is for sizing an SF Symbol image' : `Use the theme's ${brandFonts} helper; .system(size:) is for sizing an SF Symbol image`);
+          systemFontFix);
       }
     }
   });
@@ -875,11 +944,18 @@ export function validateJSX(content, filePath, tokenParser, componentRegistry) {
   return violations;
 }
 
+/** Every check for one file: its type's rules, then the 24px icon floor (icon-size.js). */
 export function validateFile(content, filePath, tokenParser, componentRegistry, native) {
+  return validateByType(content, filePath, tokenParser, componentRegistry, native)
+    .concat(findSmallIcons(content, filePath, tokenParser));
+}
+
+function validateByType(content, filePath, tokenParser, componentRegistry, native) {
   const ext = filePath.split('.').pop().toLowerCase();
   switch (ext) {
     case 'css': {
-      if (config.framework === 'php') return validateCSS(content, filePath, tokenParser);
+      // Without Tailwind (config tailwind, or the catalog's meta) an @apply line is plain CSS.
+      if (!tailwindVersion(tokenParser)) return validateCSS(content, filePath, tokenParser);
       // @apply lines are Tailwind classes, checked below, not CSS declarations.
       const found = validateCSS(content.split('\n').map(l => (/@apply\b/.test(l) ? '' : l)).join('\n'), filePath, tokenParser);
       if (config.exemptDirs.some(d => filePath.includes(d))) return found;
@@ -892,6 +968,8 @@ export function validateFile(content, filePath, tokenParser, componentRegistry, 
       return validatePHP(content, filePath, tokenParser, componentRegistry);
     case 'js':
       return validateJS(content, filePath, tokenParser);
+    case 'html':
+      return isExempt(filePath) ? [] : findLookalikes(content, filePath);
     case 'swift':
       return validateSwift(content, filePath, tokenParser, native ?? getNative());
     case 'vue':

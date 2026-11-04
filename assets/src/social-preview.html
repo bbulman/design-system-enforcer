@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>design-system-enforcer: social preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;500&display=block" rel="stylesheet">
+<link href="style.css" rel="stylesheet">
+<style>
+  /* GitHub's social preview: exactly 1280 by 640. */
+  .canvas {
+    width: 1280px;
+    height: 640px;
+    padding: 80px 88px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    --name-size: 24px;
+    --stroke: 4px;
+    --lift: 16px;
+    --fix-size: 42px;
+    --caret-gap: 10px;
+    --caret-w: 28px;
+    --caret-h: 15px;
+  }
+  .words { display: flex; flex-direction: column; gap: 22px; }
+  .headline { font-size: 66px; line-height: 1.04; max-width: 15em; }
+  .proof { font-size: 56px; padding-top: 58px; }
+  .note { font-size: 24px; line-height: 1.4; max-width: 46em; }
+</style>
+</head>
+<body>
+  <main class="canvas">
+    <div class="words">
+      <p class="name">design-system-enforcer</p>
+      <h1 class="headline">Keeps coding agents inside your design system.</h1>
+    </div>
+    <p class="proof"><span class="prop">background</span><span class="punct">: </span><span class="struck">#e54d4c<span class="correction">var(--brand)</span><svg class="caret" viewBox="0 0 28 15" aria-hidden="true"><path d="M2 13 L14 2 L26 13"/></svg></span><span class="punct">;</span></p>
+    <p class="note">An MCP server, CLI and Claude Code hooks. It names the tokens and components before an agent writes UI, then checks every edit.</p>
+  </main>
+</body>
+</html>

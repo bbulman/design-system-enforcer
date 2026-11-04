@@ -1,7 +1,7 @@
 {
-  "_comment": "A hand-written config for a PHP codebase that generates its own catalog (components.generated.json) and has three SwiftUI apps. Most projects don't need one: ds-enforcer init writes enforcer.config.json for you.",
+  "configVersion": 3,
   "name": "Workshopr",
-  "projectRoot": "../../..",
+  "projectRoot": ".",
   "framework": "php",
   "tokensCss": "design-system/platform-tokens.css",
   "catalog": "design-system/components.generated.json",
@@ -9,6 +9,19 @@
   "nativeManifest": "design-system/workshopr-design-system.json",
   "searchModule": "scripts/ds-search.mjs",
   "rootPx": 12.8,
+  "homepage": "https://workshopr.io",
+  "colorTokenChoice": "semantic",
+  "tokenNames": {
+    "colorOrder": [
+      "^--brand(-|$)",
+      "^--(color|text|bg|button|card|input)-",
+      "^--(mainsite|planner|coach|tips|podcasts|intervention|dna|training)-",
+      "^--phase-",
+      "^--gray-"
+    ],
+    "colorWords": ["phase-", "navy", "-cat-\\d"],
+    "appScoped": ["^--(coach|tips|podcasts|planner|mainsite|dna|training|phase|intervention|strategist|synth|sidekick|academy|prove|reflect|facilitat|companion)"]
+  },
   "exemptFiles": [
     "platform-tokens.css",
     "workshopr-design-system.json",
@@ -25,28 +38,181 @@
   "rawControlSkip": [
     "^vendor/",
     "^node_modules/",
+    "^\\.claude/",
     "^\\.git/",
+    "^\\.scratch/",
+    "^\\.superpowers/",
+    "^\\.omc/",
+    "^\\.impeccable/",
+    "^emails/",
+    "^includes/email-templates/",
+    "^includes/email\\.php$",
+    "^cron/",
     "^tests/",
+    "^api/",
+    "^admin/api/",
+    "^admin/(tools|test-|migrate-|setup-|update-|import-)",
     "^design-system/",
-    "^includes/components/",
-    "\\.legacy\\.php$"
+    "print\\.php$",
+    "^content/handouts/",
+    "/mockups?/",
+    "\\.legacy\\.php$",
+    "^survey/includes/",
+    "^admin/_archive/",
+    "^includes/components/"
   ],
   "docs": {
     "web": "design-system/START-HERE.md",
     "native": "design-system/native.md"
   },
+  "components": {
+    "functionPrefix": "ws_",
+    "classPrefix": "ws-",
+    "extraClassPrefixes": ["wl-"],
+    "helperFile": "includes/components/helpers.php",
+    "sourceDirs": ["includes/components/"],
+    "js": {
+      "file": "js/ws.js",
+      "namespace": "ws",
+      "sourceFiles": ["js/ws.js", "js/ws-agent.js"]
+    }
+  },
+  "text": {
+    "instructions": [
+      "Before writing UI, find what exists. Web (PHP, CSS, JS): suggest_component names the ws_* helper and its options, list_tokens the token for a role.",
+      "Native (Swift): native_apps gives an app's theme files, build and screenshot commands; list_tokens with platform \"swift\" and app gives each token as Color(hex:) and the theme constant that already mirrors it. Swift values live only in the app's theme files.",
+      "After writing, check: validate_file on every changed .php, .css, .js or .swift file, or check_snippet with code and language (css, php, js or swift; for Swift pass file_path so it knows the app and whether the file is a theme file). npm run lint:ds:native checks every native app against its baseline.",
+      "No check sees accessible names, roles, focus order or target size (44pt): read the rendered accessibility tree. Of Dynamic Type, native-fixed-font catches fixed text sizes only."
+    ],
+    "tools": {
+      "list_tokens": "List design tokens from platform-tokens.css with their purpose, tier (brand | semantic | primitive | alias) and, for a legacy alias, the --brand* token to use instead. Filter by category, or pass a plain-language role (e.g. \"red text on light\" gives --brand-ink). With platform \"swift\", each token is shown as Swift (Color(hex: 0xRRGGBB)) beside the native app constants that mirror it, drifted ones marked; add app to see one app, and with app and no filter its off-system constants too.",
+      "suggest_component": "Given a description of what UI element you need, suggest which ws_* component to use, ranked from the generated catalog (summary, when-to-use, synonyms). Each suggestion carries option values and defaults from the catalog, the legacy lookalike to avoid, the alternatives to choose instead and when (insteadOf), and a playground preview URL, labelled curated (a hand-written fixture) or auto (built from the catalog entry). E.g., \"a confirm dialog before deleting a workshop\" → ws_modal. A request whose head noun is a page, screen or flow also gets the matching screen recipe, a runnable file with default, loading, empty and error previews, first when it outscores the components, e.g. \"a page listing workshops with filters\" → recipe:filtered-workshop-list.",
+      "check_snippet.file_path": "Optional, for Swift: the project-relative or absolute path the snippet belongs in, e.g. library-app/WorkshoprLibrary/Screens/Home/HomeView.swift",
+      "consult_ui.file": "Project-relative path of the file you are about to change, e.g. app/views/team.php",
+      "record_case.file": "Project-relative path of the file the markup is in, e.g. app/views/team.php",
+      "scan_components.paths": "Optional project-relative files or folders to scan instead of the whole codebase, e.g. [\"admin/analytics\"]"
+    },
+    "componentsFooter": "From `/design-system/components.generated.json` (components in helpers.php, page-level in includes/components/*.php, app-local in app/includes/workshop-list.php).\nCSS in `/includes/components/components.css`.\nDemos at `/design-system/component-library.php`.",
+    "noComponent": "You may need to create a new component. Add it as a ws_* function in /includes/components/helpers.php with a demo in /design-system/components/.",
+    "noColorToken": "No matching token found: add to platform-tokens.css or use existing semantic token",
+    "spacingOffScale": "Use nearest token from spacing scale (4px base)",
+    "native": {
+      "pureBlack": "Pure black text violates the design rules",
+      "pureBlackFix": "Use {ink} (--color-ink #2C2416), never .black",
+      "inkHex": "#2C2416",
+      "font": "Use Fraunces for headlines or Inter for text (icons: {iconFonts}), through the theme's font helpers",
+      "systemFont": "Use the theme's Fraunces or Inter helper; .system(size:) is for sizing an SF Symbol image"
+    }
+  },
+  "staged": {
+    "checks": [
+      {
+        "name": "Page check (check-page.php)",
+        "failure": "page check",
+        "when": "^(?!.* \\d+\\.[a-z]+$)(?:.*/)?[^/]+\\.php$",
+        "command": ["php", "{snapshot}/design-system/check-page.php", "{files}"],
+        "batch": 400,
+        "unit": "pages",
+        "needsPhp": true,
+        "requires": "design-system/check-page.php",
+        "baselines": [
+          { "file": "design-system/page-baseline.json" },
+          { "file": "design-system/legacy-baseline.json", "key": "files" }
+        ]
+      },
+      {
+        "name": "Design-system JSON drift (check-drift.php)",
+        "failure": "drift",
+        "when": "^(design-system/(workshopr-design-system\\.json|platform-tokens\\.css|check-drift\\.php|components/demos/[^/]+\\.php)|includes/components/(helpers\\.php|components\\.css))$",
+        "command": ["php", "{snapshot}/design-system/check-drift.php"],
+        "needsPhp": true,
+        "sources": true
+      },
+      {
+        "name": "Generated component catalog",
+        "failure": "catalog",
+        "when": "^(includes/components/[^/]+\\.php|app/includes/workshop-list\\.php|design-system/(generate-catalog\\.php|components\\.generated\\.json|platform-tokens\\.css|legacy-patterns\\.json|catalog-baseline\\.json|workshopr-design-system\\.json|includes/playground-fixtures\\.php|components/demos/[^/]+\\.php))$",
+        "command": ["php", "{snapshot}/design-system/generate-catalog.php", "--check"],
+        "needsPhp": true,
+        "sources": true
+      },
+      {
+        "name": "DTCG token export",
+        "failure": "token export",
+        "when": "^design-system/(platform-tokens\\.css|generate-tokens-dtcg\\.php|tokens\\.dtcg\\.json)$",
+        "command": ["php", "{snapshot}/design-system/generate-tokens-dtcg.php", "--check"],
+        "needsPhp": true,
+        "sources": true
+      },
+      {
+        "name": "js/ws.js icons",
+        "failure": "ws.js icons",
+        "when": "^(js/ws\\.js|images/icons/[^/]+\\.svg|scripts/ds-ws-icons\\.mjs)$",
+        "command": ["node", "{snapshot}/scripts/ds-ws-icons.mjs", "--check"],
+        "requires": "scripts/ds-ws-icons.mjs",
+        "export": ["images/icons/*.svg"]
+      }
+    ],
+    "hint": "A component for what you built: npm run ds:find -- \"<what it is>\".",
+    "noPhp": "note: php not found, so the page, drift and catalog checks were skipped (CI still runs them)."
+  },
+  "commitGate": {
+    "jsComponents": "block"
+  },
+  "componentGate": {
+    "enabled": true,
+    "autoSwap": false,
+    "minScore": 5,
+    "clearMargin": 10,
+    "skip": [
+      "^api/",
+      "^cron/",
+      "^tests/",
+      "^emails/",
+      "^includes/email-templates/",
+      "^design-system/",
+      "^includes/components/",
+      "^\\.scratch/",
+      "^admin/_archive/",
+      "^vendor/",
+      "^node_modules/",
+      "^\\.claude/",
+      "^agents/"
+    ],
+    "reviewUrl": "http://localhost:8084/design-system/review.php",
+    "shellParser": "agents/feature-build/scripts/walls.mjs",
+    "reviewer": "Bill",
+    "files": { "gate": [".php", ".css"], "detect": [".js", ".html"] },
+    "pages": {
+      "types": [".php"],
+      "skip": ["(^|/)_archive/", "index\\.legacy\\.php$"],
+      "included": ["(^|/)(includes|partials|views)/", "(^|/)_[^/]*\\.php$"],
+      "notPages": ["^admin/"]
+    },
+    "scanSkip": ["_archive", "(^|/)index\\.legacy\\.php$"]
+  },
   "rules": {
     "pureBlack": {
       "enabled": true,
       "severity": "high",
-      "message": "Pure black (#000) violates design rules — use warm neutrals",
-      "suggestion": "Use var(--color-ink) (#2C2416) for text, var(--gray-900) for darkest bg"
+      "message": "Pure black (#000) violates design rules: use warm neutrals",
+      "suggestion": "Use var(--color-ink) (#2C2416) for text, var(--gray-900) for darkest bg",
+      "native": true
     },
     "pureWhite": {
       "enabled": true,
       "severity": "medium",
-      "message": "Pure white background violates design rules — use warm off-whites",
+      "message": "Pure white background violates design rules: use warm off-whites",
       "suggestion": "Use var(--bg-page) or var(--bg-surface)"
     }
+  },
+  "iconSize": {
+    "enabled": true,
+    "min": 24,
+    "token": "--icon-lg",
+    "retired": ["--icon-xs", "--icon-sm", "--icon-md"],
+    "glyphClasses": ["material-symbols", "material-icons"],
+    "inlineGlyphClasses": ["material-symbols-outlined", "material-symbols-rounded"],
+    "doc": "DESIGN.md §8"
   }
 }

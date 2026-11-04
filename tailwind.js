@@ -50,7 +50,7 @@ const TEXTISH = /^(text|fill|stroke|decoration|placeholder|caret)$/;
  */
 function pickForPrefix(prefix, names, tokenParser) {
   if (!names?.length) return null;
-  if (config.framework === 'php') return tokenParser.pickBestColorToken(names);
+  if (config.colorTokenChoice === 'semantic') return tokenParser.pickBestColorToken(names);
   const fg = n => /foreground|text|ink/.test(n);
   const canonical = n => (/^--(color-)?(background|foreground|primary|border)$/.test(n) ? 0 : 1);
   const segments = n => n.replace(/^--(color-)?/, '').split('-').length;

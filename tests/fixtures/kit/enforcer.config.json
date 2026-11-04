@@ -1,0 +1,166 @@
+{
+  "configVersion": 3,
+  "name": "Kit",
+  "projectRoot": ".",
+  "framework": "php",
+  "tokensCss": "ds/tokens.css",
+  "catalog": "ds/catalog.json",
+  "synonyms": "ds/synonyms.json",
+  "nativeManifest": "ds/native.json",
+  "baseline": "ds/baseline.json",
+  "rootPx": 14,
+  "homepage": "https://kit.example",
+  "colorTokenChoice": "semantic",
+  "tokenNames": {
+    "colorOrder": ["^--brand(-|$)", "^--(color|text|bg)-", "^--gray-"],
+    "colorWords": ["-hue-\\d"],
+    "appScoped": ["^--(promo|shop)-"],
+    "nativeCore": ["^--(brand|color-|bg-)"]
+  },
+  "exemptFiles": ["tokens.css", "kit.php", "kit.css"],
+  "exemptDirs": ["node_modules", "vendor", ".git", "ds/tokens.css"],
+  "rawControlSkip": [
+    "^vendor/",
+    "^node_modules/",
+    "^\\.git/",
+    "^api/",
+    "^emails/",
+    "^tests/",
+    "^ds/",
+    "^internal/_old/",
+    "^lib/components/",
+    "print\\.php$",
+    "\\.legacy\\.php$",
+    "/mockups?/"
+  ],
+  "docs": {
+    "web": "ds/GUIDE.md",
+    "native": "ds/NATIVE.md"
+  },
+  "components": {
+    "functionPrefix": "kit_",
+    "classPrefix": "kit-",
+    "extraClassPrefixes": ["kx-"],
+    "helperFile": "lib/components/kit.php",
+    "sourceDirs": ["lib/components/"],
+    "js": {
+      "file": "js/kit.js",
+      "namespace": "kit",
+      "sourceFiles": ["js/kit.js"]
+    }
+  },
+  "text": {
+    "instructions": [
+      "Kit fixture: find the kit_* helper with suggest_component before writing markup.",
+      "Check every changed file with validate_file."
+    ],
+    "tools": {
+      "list_tokens": "List the kit fixture's tokens from ds/tokens.css."
+    },
+    "componentsFooter": "From ds/catalog.json; the templates are in lib/components/.",
+    "noComponent": "Add it as a kit_* function in lib/components/kit.php.",
+    "native": {
+      "pureBlack": "Pure black text is not a kit colour",
+      "pureBlackFix": "Use {ink} (--color-ink #1F2937), never .black",
+      "inkHex": "#1F2937",
+      "font": "Use {brandFonts} (icons: {iconFonts}) through the theme's font helpers",
+      "systemFont": "Use the theme's {brandFonts} helper; .system(size:) is for sizing an SF Symbol"
+    }
+  },
+  "staged": {
+    "checks": [
+      {
+        "name": "Page check (page-check.mjs)",
+        "failure": "page check",
+        "when": "^(?!.* \\d+\\.[a-z]+$)(?:.*/)?[^/]+\\.php$",
+        "command": ["node", "{snapshot}/tools/page-check.mjs", "{files}"],
+        "batch": 2,
+        "unit": "pages",
+        "requires": "tools/page-check.mjs",
+        "baselines": [
+          { "file": "ds/page-baseline.json" },
+          { "file": "ds/legacy-baseline.json", "key": "files" }
+        ]
+      },
+      {
+        "name": "PHP lint",
+        "failure": "php lint",
+        "when": "^lib/components/[^/]+\\.php$",
+        "command": ["php", "-l", "{files}"],
+        "needsPhp": true
+      },
+      {
+        "name": "Catalog freshness (catalog-check.mjs)",
+        "failure": "catalog",
+        "when": "^(ds/(tokens\\.css|catalog\\.json)|lib/components/[^/]+\\.php)$",
+        "command": ["node", "{snapshot}/tools/catalog-check.mjs"],
+        "sources": true
+      },
+      {
+        "name": "Glyph files",
+        "failure": "glyphs",
+        "when": "^images/glyphs/[^/]+\\.svg$",
+        "command": ["node", "{snapshot}/tools/glyph-check.mjs"],
+        "requires": "tools/glyph-check.mjs",
+        "export": ["images/glyphs/*.svg"]
+      }
+    ],
+    "hint": "A component for what you built: ask suggest_component.",
+    "noPhp": "note: php not found, so these checks were skipped: {checks}."
+  },
+  "commitGate": {
+    "jsComponents": "block"
+  },
+  "componentGate": {
+    "enabled": true,
+    "autoSwap": false,
+    "minScore": 5,
+    "clearMargin": 10,
+    "skip": [
+      "^api/",
+      "^emails/",
+      "^tests/",
+      "^ds/",
+      "^lib/components/",
+      "^internal/_old/",
+      "^tools/",
+      "^vendor/",
+      "^node_modules/"
+    ],
+    "reviewUrl": "http://localhost:9999/review",
+    "shellParser": "tools/shell-writes.mjs",
+    "reviewer": "Rae",
+    "files": { "gate": [".php", ".css"], "detect": [".js", ".html"] },
+    "pages": {
+      "types": [".php"],
+      "skip": ["(^|/)_old/", "\\.legacy\\.php$"],
+      "included": ["(^|/)(parts|partials)/", "(^|/)_[^/]*\\.php$"],
+      "notPages": ["^internal/"]
+    },
+    "scanSkip": ["(^|/)_old/", "\\.legacy\\.php$"]
+  },
+  "rules": {
+    "pureBlack": {
+      "enabled": true,
+      "severity": "high",
+      "message": "Pure black is not a kit colour",
+      "suggestion": "Use var(--color-ink) for text, var(--gray-900) for the darkest background",
+      "native": true
+    },
+    "pureWhite": {
+      "enabled": true,
+      "severity": "medium",
+      "message": "Pure white backgrounds are not kit colours",
+      "suggestion": "Use var(--bg-page) or var(--bg-surface)"
+    }
+  },
+  "iconSize": {
+    "enabled": true,
+    "min": 24,
+    "token": "--glyph-lg",
+    "retired": ["--glyph-sm", "--glyph-md"],
+    "glyphClasses": ["glyphs"],
+    "inlineGlyphClasses": ["glyphs-outlined", "glyphs-rounded"],
+    "doc": "STYLE.md §3"
+  }
+}

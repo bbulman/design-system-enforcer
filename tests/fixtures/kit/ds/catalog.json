@@ -1,0 +1,1293 @@
+{
+ "meta": {
+  "_comment": "The kit fixture's catalog, in the enforcer's catalog format. Hand-written for the tests: every name in it is made up.",
+  "count": 32
+ },
+ "components": {
+  "kit_button": {
+   "signature": "kit_button(string $text, array $options = []): string",
+   "summary": "Render a button that runs an action or follows a link",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$text"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "text": {
+     "source": "template"
+    },
+    "variant": {
+     "default": "primary",
+     "type": "string",
+     "values": [
+      "primary",
+      "secondary",
+      "ghost",
+      "danger"
+     ],
+     "source": "template"
+    },
+    "size": {
+     "default": "md",
+     "type": "string",
+     "values": [
+      "sm",
+      "md",
+      "lg"
+     ],
+     "source": "template"
+    },
+    "type": {
+     "default": "button",
+     "type": "string",
+     "values": [
+      "button",
+      "submit",
+      "reset"
+     ],
+     "source": "template"
+    },
+    "href": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "icon": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    },
+    "attrs": {
+     "default": [],
+     "type": "array",
+     "source": "template"
+    }
+   },
+   "example": "<?= kit_button('Save', ['variant' => 'primary']) ?>",
+   "whenToUse": "The reader clicks it to do something: save, delete, open.",
+   "whenNotToUse": "It only labels something; use a badge.",
+   "js": "kit.button(text, options)",
+   "preview": "/ds/play?component=button&state=default&preview=1",
+   "previewKind": "curated"
+  },
+  "kit_icon_button": {
+   "signature": "kit_icon_button(string $icon, array $options = []): string",
+   "summary": "Render an icon-only button with an accessible label",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$icon"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "variant": {
+     "default": "ghost",
+     "type": "string",
+     "values": [
+      "primary",
+      "secondary",
+      "ghost"
+     ],
+     "source": "template"
+    },
+    "size": {
+     "default": "md",
+     "type": "string",
+     "values": [
+      "sm",
+      "md",
+      "lg"
+     ],
+     "source": "template"
+    },
+    "label": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   },
+   "example": "<?= kit_icon_button('close', ['label' => 'Close']) ?>"
+  },
+  "kit_badge": {
+   "signature": "kit_badge(string $text, array $options = []): string",
+   "summary": "Render a badge: a short label on a row, card or heading",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$text"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "text": {
+     "source": "template"
+    },
+    "variant": {
+     "default": "default",
+     "type": "string",
+     "values": [
+      "default",
+      "status",
+      "count",
+      "new"
+     ],
+     "source": "template"
+    },
+    "status": {
+     "default": null,
+     "type": "string",
+     "values": [
+      "success",
+      "warning",
+      "error",
+      "info"
+     ],
+     "source": "template"
+    },
+    "size": {
+     "default": "md",
+     "type": "string",
+     "values": [
+      "sm",
+      "md"
+     ],
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    },
+    "attrs": {
+     "default": [],
+     "type": "array",
+     "source": "template"
+    }
+   },
+   "example": "<?= kit_badge('Done', ['variant' => 'default']) ?>",
+   "whenToUse": "You are annotating a row or heading with metadata the reader scans — \"45 min\", \"Done\", \"3\".",
+   "whenNotToUse": "The label does something when clicked – use a button.",
+   "js": "kit.badge(text, options)",
+   "preview": "/ds/play?component=badge&state=default&preview=1",
+   "previewKind": "curated"
+  },
+  "kit_pill": {
+   "signature": "kit_pill(string $text, array $options = []): string",
+   "summary": "Render a removable pill for a chosen filter",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$text"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "text": {
+     "source": "template"
+    },
+    "removable": {
+     "default": false,
+     "type": "bool",
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   },
+   "example": "<?= kit_pill('Remote') ?>",
+   "js": "kit.pill(text, options)"
+  },
+  "kit_status": {
+   "signature": "kit_status(string $text, string $status = 'info'): string",
+   "summary": "Render a status dot with its word",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$text"
+    },
+    {
+     "type": "string",
+     "name": "$status",
+     "position": 1,
+     "values": [
+      "success",
+      "info",
+      "warning",
+      "error"
+     ],
+     "default": "info"
+    }
+   ],
+   "example": "<?= kit_status('Live', 'success') ?>"
+  },
+  "kit_modal": {
+   "signature": "kit_modal(string $id, array $options = []): string",
+   "summary": "Render a modal dialog that asks the reader to confirm or fill something in",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$id"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "title": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "size": {
+     "default": "md",
+     "type": "string",
+     "values": [
+      "sm",
+      "md",
+      "lg"
+     ],
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   },
+   "example": "<?= kit_modal('confirm-delete', ['title' => 'Delete this item?']) ?>",
+   "whenToUse": "The reader has to decide before going on — confirm a delete, fill in a short form.",
+   "insteadOf": [
+    {
+     "use": "kit_side_panel",
+     "when": "when the reader keeps the page in view while they work beside it."
+    },
+    {
+     "use": "kit_alert",
+     "when": "when the message belongs in the page beside what it is about."
+    }
+   ],
+   "preview": "/ds/play?component=modal&state=default&preview=1",
+   "previewKind": "curated"
+  },
+  "kit_modal_start": {
+   "signature": "kit_modal_start(string $id, array $options = []): string",
+   "summary": "Open a modal around the markup that follows",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$id"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "title": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "size": {
+     "default": "md",
+     "type": "string",
+     "values": [
+      "sm",
+      "md",
+      "lg"
+     ],
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   }
+  },
+  "kit_modal_end": {
+   "signature": "kit_modal_end(): string",
+   "summary": "Close a modal that kit_modal_start opened",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php"
+  },
+  "kit_side_panel": {
+   "signature": "kit_side_panel(string $id, array $options = []): string",
+   "summary": "Render a side panel that slides over the edge of the page",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$id"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "title": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   }
+  },
+  "kit_card": {
+   "signature": "kit_card(string $content, array $options = []): string",
+   "summary": "Render a card: a bordered surface for one item",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$content"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "variant": {
+     "default": "default",
+     "type": "string",
+     "values": [
+      "default",
+      "compact",
+      "raised"
+     ],
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    },
+    "attrs": {
+     "default": [],
+     "type": "array",
+     "source": "template"
+    }
+   },
+   "example": "<?= kit_card($body) ?>",
+   "js": "kit.card(content, options)",
+   "preview": "/ds/play?component=card&state=default&preview=1",
+   "previewKind": "auto"
+  },
+  "kit_card_start": {
+   "signature": "kit_card_start(array $options = []): string",
+   "summary": "Open a card around the markup that follows",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "variant": {
+     "default": "default",
+     "type": "string",
+     "values": [
+      "default",
+      "compact",
+      "raised"
+     ],
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   }
+  },
+  "kit_card_end": {
+   "signature": "kit_card_end(): string",
+   "summary": "Close a card that kit_card_start opened",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php"
+  },
+  "kit_card_deck": {
+   "signature": "kit_card_deck(array $cards): string",
+   "summary": "Render a deck of cards to swipe through",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "array",
+     "name": "$cards"
+    }
+   ]
+  },
+  "kit_listing_card": {
+   "signature": "kit_listing_card(array $item): string",
+   "summary": "Render a listing card for one library item",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "array",
+     "name": "$item"
+    }
+   ]
+  },
+  "kit_choice_cards": {
+   "signature": "kit_choice_cards(string $name, array $choices): string",
+   "summary": "Render choice cards the reader picks one from",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$name"
+    },
+    {
+     "type": "array",
+     "name": "$choices"
+    }
+   ]
+  },
+  "kit_radio_card_group": {
+   "signature": "kit_radio_card_group(string $name, array $choices): string",
+   "summary": "Render a group of radio cards for one choice among a few",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$name"
+    },
+    {
+     "type": "array",
+     "name": "$choices"
+    }
+   ]
+  },
+  "kit_alert": {
+   "signature": "kit_alert(string $message, array $options = []): string",
+   "summary": "Render an alert that tells the reader something went wrong or right",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$message"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "variant": {
+     "default": "info",
+     "type": "string",
+     "values": [
+      "info",
+      "success",
+      "warning",
+      "error"
+     ],
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   },
+   "example": "<?= kit_alert('Saved.', ['variant' => 'success']) ?>",
+   "js": "kit.alert(message, options)"
+  },
+  "kit_input": {
+   "signature": "kit_input(string $name, array $options = []): string",
+   "summary": "Render a text field with its label",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$name"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "type": {
+     "default": "text",
+     "type": "string",
+     "values": [
+      "text",
+      "email",
+      "password",
+      "number",
+      "textarea"
+     ],
+     "source": "template"
+    },
+    "label": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "placeholder": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "value": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    },
+    "attrs": {
+     "default": [],
+     "type": "array",
+     "source": "template"
+    }
+   },
+   "example": "<?= kit_input('email', ['type' => 'email', 'label' => 'Email']) ?>",
+   "js": "kit.input(name, options)"
+  },
+  "kit_select": {
+   "signature": "kit_select(string $name, array $items, array $options = []): string",
+   "summary": "Render a select menu with its label",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$name"
+    },
+    {
+     "type": "array",
+     "name": "$items"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "label": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   },
+   "js": "kit.select(name, items, options)"
+  },
+  "kit_toggle": {
+   "signature": "kit_toggle(string $name, array $options = []): string",
+   "summary": "Render a toggle switch for an on or off setting",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$name"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "label": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "checked": {
+     "default": false,
+     "type": "bool",
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   }
+  },
+  "kit_tabs": {
+   "signature": "kit_tabs(array $items, array $options = []): string",
+   "summary": "Render tabs that switch between panels",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "array",
+     "name": "$items"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "variant": {
+     "default": "line",
+     "type": "string",
+     "values": [
+      "line",
+      "pill"
+     ],
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   },
+   "js": "kit.tabs(items, options)"
+  },
+  "kit_empty_state": {
+   "signature": "kit_empty_state(string $title, array $options = []): string",
+   "summary": "Render an empty state for a list with nothing in it",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$title"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "text": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "action": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   },
+   "example": "<?= kit_empty_state('Nothing here yet') ?>",
+   "js": "kit.emptyState(title, options)"
+  },
+  "kit_stat": {
+   "signature": "kit_stat(string $value, string $label): string",
+   "summary": "Render one figure with its label",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$value"
+    },
+    {
+     "type": "string",
+     "name": "$label"
+    }
+   ]
+  },
+  "kit_stats": {
+   "signature": "kit_stats(array $items): string",
+   "summary": "Render several stats side by side",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "array",
+     "name": "$items"
+    }
+   ]
+  },
+  "kit_progress": {
+   "signature": "kit_progress(int $value, array $options = []): string",
+   "summary": "Render a progress bar",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "int",
+     "name": "$value"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "variant": {
+     "default": "default",
+     "type": "string",
+     "values": [
+      "default",
+      "success"
+     ],
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   },
+   "whenToUse": "Show how far through a task the reader is, never a timeline of events."
+  },
+  "kit_skeleton": {
+   "signature": "kit_skeleton(array $options = []): string",
+   "summary": "Render a loading placeholder",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "variant": {
+     "default": "text",
+     "type": "string",
+     "values": [
+      "text",
+      "block"
+     ],
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   }
+  },
+  "kit_header": {
+   "signature": "kit_header(string $section, array $options = []): string",
+   "summary": "Render the site header with its navigation bar",
+   "context": null,
+   "scope": "page",
+   "source": "/lib/components/header.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$section"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "title": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "nav": {
+     "default": [],
+     "type": "array",
+     "source": "template"
+    }
+   }
+  },
+  "kit_section_header": {
+   "signature": "kit_section_header(string $title, array $options = []): string",
+   "summary": "Render a section header with its title and subtitle",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "string",
+     "name": "$title"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "subtitle": {
+     "default": null,
+     "type": "string",
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   }
+  },
+  "kit_list_fetch": {
+   "signature": "kit_list_fetch(int $userId): array",
+   "summary": "Fetch the items a list shows, none yet for a new user",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "int",
+     "name": "$userId"
+    }
+   ]
+  },
+  "kit_grid": {
+   "signature": "kit_grid(array $items, array $options = []): string",
+   "summary": "Render items in an even grid of columns",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "array",
+     "name": "$items"
+    },
+    {
+     "type": "array",
+     "name": "$options"
+    }
+   ],
+   "optionSpec": {
+    "columns": {
+     "default": 3,
+     "type": "int",
+     "values": [
+      2,
+      3,
+      4
+     ],
+     "source": "template"
+    },
+    "class": {
+     "default": "",
+     "type": "string",
+     "source": "template"
+    }
+   }
+  },
+  "kit_promo_grid": {
+   "signature": "kit_promo_grid(array $items): string",
+   "summary": "Render the promotion grid",
+   "context": null,
+   "scope": "component",
+   "source": "/lib/components/kit.php",
+   "params": [
+    {
+     "type": "array",
+     "name": "$items"
+    }
+   ]
+  },
+  "kit_footer": {
+   "signature": "kit_footer(): string",
+   "summary": "Render the site footer, the promotion grid above it",
+   "context": null,
+   "scope": "page",
+   "source": "/lib/components/kit.php"
+  }
+ },
+ "tokens": {
+  "--brand": {
+   "value": "#C2410C",
+   "purpose": "buttons and fills that carry white text",
+   "group": "Brand",
+   "tier": "brand"
+  },
+  "--brand-ink": {
+   "value": "#9A3412",
+   "purpose": "brand text on a light background",
+   "group": "Brand",
+   "tier": "brand"
+  },
+  "--brand-soft": {
+   "value": "#FFEDD5",
+   "purpose": "a soft brand background for a chip",
+   "group": "Brand",
+   "tier": "brand"
+  },
+  "--brand-tint": {
+   "value": "#EAE1E0",
+   "purpose": "the faintest brand wash behind a section",
+   "group": "Brand",
+   "tier": "brand"
+  },
+  "--color-ink": {
+   "value": "#1F2937",
+   "purpose": "body text",
+   "group": "Neutrals",
+   "tier": "semantic"
+  },
+  "--ink-1": {
+   "value": "#1F2937",
+   "purpose": "body text, by its short name",
+   "group": "Neutrals",
+   "tier": "semantic"
+  },
+  "--bg-page": {
+   "value": "#FAF7F2",
+   "purpose": "the page background",
+   "group": "Neutrals",
+   "tier": "semantic"
+  },
+  "--bg-surface": {
+   "value": "#FFFDF9",
+   "purpose": "a card or panel surface",
+   "group": "Neutrals",
+   "tier": "semantic"
+  },
+  "--gray-200": {
+   "value": "#E0E0EA",
+   "purpose": "hairlines",
+   "group": "Neutrals",
+   "tier": "primitive"
+  },
+  "--gray-500": {
+   "value": "#6B7280",
+   "purpose": "muted text",
+   "group": "Neutrals",
+   "tier": "primitive"
+  },
+  "--gray-900": {
+   "value": "#111827",
+   "purpose": "the darkest background",
+   "group": "Neutrals",
+   "tier": "primitive"
+  },
+  "--overlay-medium": {
+   "value": "rgba(255, 255, 255, 0.85)",
+   "purpose": "a white veil over content",
+   "group": "Neutrals",
+   "tier": "semantic"
+  },
+  "--color-success": {
+   "value": "#15803D",
+   "purpose": "success text and icons",
+   "group": "Status",
+   "tier": "semantic"
+  },
+  "--color-error": {
+   "value": "#B91C1C",
+   "purpose": "danger text and error borders",
+   "group": "Status",
+   "tier": "semantic"
+  },
+  "--promo-red": {
+   "value": "#C2410C",
+   "purpose": "the promotion banner's red",
+   "group": "Apps",
+   "tier": "primitive"
+  },
+  "--promo-glow": {
+   "value": "#E1E1E1",
+   "purpose": "the promotion grid's glow",
+   "group": "Apps",
+   "tier": "primitive"
+  },
+  "--shop-hue-1": {
+   "value": "#2563EB",
+   "purpose": "the shop's first category colour",
+   "group": "Apps",
+   "tier": "primitive"
+  },
+  "--old-ink": {
+   "value": "var(--brand-ink)",
+   "purpose": null,
+   "group": "Legacy",
+   "tier": "alias",
+   "resolved": "#9A3412",
+   "use": "--brand-ink"
+  },
+  "--space-1": {
+   "value": "4px",
+   "purpose": "the tightest gap",
+   "group": "Spacing",
+   "tier": "primitive"
+  },
+  "--space-2": {
+   "value": "8px",
+   "purpose": "a small gap",
+   "group": "Spacing",
+   "tier": "primitive"
+  },
+  "--space-3": {
+   "value": "12px",
+   "purpose": "a gap between fields",
+   "group": "Spacing",
+   "tier": "primitive"
+  },
+  "--space-4": {
+   "value": "16px",
+   "purpose": "card padding",
+   "group": "Spacing",
+   "tier": "semantic"
+  },
+  "--space-6": {
+   "value": "24px",
+   "purpose": "section padding",
+   "group": "Spacing",
+   "tier": "primitive"
+  },
+  "--space-8": {
+   "value": "32px",
+   "purpose": "the gap between sections",
+   "group": "Spacing",
+   "tier": "primitive"
+  },
+  "--radius-sm": {
+   "value": "4px",
+   "purpose": "inputs",
+   "group": "Radius",
+   "tier": "primitive"
+  },
+  "--radius-md": {
+   "value": "8px",
+   "purpose": "cards",
+   "group": "Radius",
+   "tier": "primitive"
+  },
+  "--radius-full": {
+   "value": "9999px",
+   "purpose": "pills",
+   "group": "Radius",
+   "tier": "primitive"
+  },
+  "--shadow-sm": {
+   "value": "0 1px 2px rgba(0, 0, 0, 0.05)",
+   "purpose": "a resting card",
+   "group": "Shadows",
+   "tier": "primitive"
+  },
+  "--shadow-md": {
+   "value": "0 4px 8px rgba(0, 0, 0, 0.08)",
+   "purpose": "a raised card",
+   "group": "Shadows",
+   "tier": "primitive"
+  },
+  "--font-heading": {
+   "value": "'Kitserif', Georgia, serif",
+   "purpose": "headings",
+   "group": "Type",
+   "tier": "semantic"
+  },
+  "--font-body": {
+   "value": "'Kitsans', system-ui, sans-serif",
+   "purpose": "body text",
+   "group": "Type",
+   "tier": "semantic"
+  },
+  "--text-small": {
+   "value": "0.875rem",
+   "purpose": "small text",
+   "group": "Type",
+   "tier": "primitive"
+  },
+  "--text-body": {
+   "value": "1rem",
+   "purpose": "body text size",
+   "group": "Type",
+   "tier": "primitive"
+  },
+  "--text-large": {
+   "value": "1.25rem",
+   "purpose": "lead text size",
+   "group": "Type",
+   "tier": "primitive"
+  },
+  "--glyph-sm": {
+   "value": "16px",
+   "purpose": "retired for icons",
+   "group": "Icons",
+   "tier": "primitive"
+  },
+  "--glyph-md": {
+   "value": "20px",
+   "purpose": "retired for icons",
+   "group": "Icons",
+   "tier": "primitive"
+  },
+  "--glyph-lg": {
+   "value": "24px",
+   "purpose": "the smallest an icon is anywhere",
+   "group": "Icons",
+   "tier": "primitive"
+  },
+  "--glyph-xl": {
+   "value": "32px",
+   "purpose": "a large icon",
+   "group": "Icons",
+   "tier": "primitive"
+  }
+ },
+ "legacy": {
+  "classes": [
+   {
+    "pattern": ".modal-overlay",
+    "match": "\\bmodal-overlay\\b",
+    "use": "kit_modal",
+    "why": "A hand-made overlay has no focus trap; kit_modal has one."
+   },
+   {
+    "pattern": ".promo-card",
+    "match": "\\bpromo-card\\b",
+    "use": "kit_card",
+    "why": "A copied card drifts in padding; kit_card does not."
+   }
+  ],
+  "tokens": []
+ },
+ "recipes": {
+  "settings-form": {
+   "title": "Settings form",
+   "whenToUse": "A settings page where the reader changes preferences with a form.",
+   "components": [
+    "kit_section_header",
+    "kit_input",
+    "kit_toggle",
+    "kit_button"
+   ],
+   "states": [
+    "default",
+    "loading",
+    "empty",
+    "error"
+   ],
+   "preview": "/ds/recipes/settings-form?state=default",
+   "previews": {
+    "default": "/ds/recipes/settings-form?state=default",
+    "loading": "/ds/recipes/settings-form?state=loading",
+    "empty": "/ds/recipes/settings-form?state=empty",
+    "error": "/ds/recipes/settings-form?state=error"
+   },
+   "source": "ds/recipes/settings-form.php",
+   "stylesheet": "ds/recipes/recipes.css",
+   "guide": "ds/recipes/README.md",
+   "mobile": "Fields stack in one column.",
+   "why": "Fields, toggles and one save button, nothing else."
+  },
+  "filtered-list": {
+   "title": "Filtered item list",
+   "whenToUse": "A page listing items that people narrow down with filters.",
+   "components": [
+    "kit_section_header",
+    "kit_select",
+    "kit_card",
+    "kit_empty_state",
+    "kit_skeleton"
+   ],
+   "states": [
+    "default",
+    "loading",
+    "empty",
+    "error"
+   ],
+   "preview": "/ds/recipes/filtered-list?state=default",
+   "previews": {
+    "default": "/ds/recipes/filtered-list?state=default",
+    "loading": "/ds/recipes/filtered-list?state=loading",
+    "empty": "/ds/recipes/filtered-list?state=empty",
+    "error": "/ds/recipes/filtered-list?state=error"
+   },
+   "source": "ds/recipes/filtered-list.php",
+   "stylesheet": "ds/recipes/recipes.css",
+   "guide": "ds/recipes/README.md",
+   "mobile": "The filters stack above one column of cards.",
+   "why": "Filters above, cards below, an empty state for no match."
+  }
+ }
+}

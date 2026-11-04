@@ -1,0 +1,23 @@
+{
+  "_comment": "The words people use for the kit fixture's components, tokens and recipes.",
+  "components": {
+    "kit_badge": ["status label", "label", "tag"],
+    "kit_modal": ["confirm dialog", "dialog", "delete confirmation", "popup"],
+    "kit_stat": ["headline number"],
+    "kit_stats": ["row of headline numbers"],
+    "kit_toggle": ["toggle switch", "switch"],
+    "kit_empty_state": ["no results", "no items yet", "nothing yet"],
+    "kit_header": ["page header", "site header", "nav bar"],
+    "kit_section_header": ["title and subtitle"],
+    "kit_button": ["call to action"],
+    "kit_alert": ["error message", "notice"]
+  },
+  "tokens": {
+    "--brand-ink": ["red text on light", "brand text"],
+    "--space-4": ["card padding"],
+    "--color-error": ["danger text"]
+  },
+  "recipes": {
+    "filtered-list": ["listing with filters"]
+  }
+}
