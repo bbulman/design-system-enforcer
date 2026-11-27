@@ -36,7 +36,7 @@ npm install --save-dev github:bbulman/design-system-enforcer
 npx ds-enforcer help
 ```
 
-The package lands in `node_modules/design-system-enforcer/`, and `npx ds-enforcer` runs it. Wherever this page says `ds-enforcer`, use `npx ds-enforcer` instead. To pin a release once it's tagged, add the tag: `github:bbulman/design-system-enforcer#v1.4.0`.
+The package lands in `node_modules/design-system-enforcer/`, and `npx ds-enforcer` runs it. Wherever this page says `ds-enforcer`, use `npx ds-enforcer` instead. To pin a release once it's tagged, add the tag: `github:bbulman/design-system-enforcer#v1.5.0`.
 
 **Don't run `npm install design-system-enforcer`.** That name on the npm registry belongs to a different package. Always install with the `github:` prefix.
 
@@ -382,7 +382,7 @@ The config was written for an older version of the format, when some settings ca
 
 ### The server won't start in a client
 
-- Run the command from the client's config in your shell: `node /path/to/design-system-enforcer/index.js`. If it says `Cannot find package '@modelcontextprotocol/sdk'`, run `npm install` in the enforcer's folder, or point the client at `bin/ds-enforcer.mjs`, which installs it.
+- Run the command from the client's config in your shell: `node /path/to/design-system-enforcer/index.js`. If it says `Cannot find package '@modelcontextprotocol/server'`, run `npm install` in the enforcer's folder, or point the client at `bin/ds-enforcer.mjs`, which installs it.
 - Started by hand, the server prints nothing and waits for a client. That's normal. Press Ctrl+C.
 - "Design system not loaded" on stderr means a connected source couldn't be read. Fix the file or run `ds-enforcer sync`.
 - Claude Desktop writes each server's stderr to `mcp-server-design-system-enforcer.log`, in `~/Library/Logs/Claude` on macOS and `%APPDATA%\Claude\logs` on Windows.
