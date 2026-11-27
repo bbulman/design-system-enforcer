@@ -23,13 +23,14 @@ import { execFileSync, spawnSync } from 'node:child_process';
 /* True when the MCP SDK resolves from here as the server will import it: from the package's own
    node_modules or any above it, as an npm install that hoists dependencies into the project leaves it. */
 function sdkResolves() {
-  try { import.meta.resolve('@modelcontextprotocol/sdk/server/index.js'); return true; } catch { return false; }
+  try { import.meta.resolve('@modelcontextprotocol/server'); return true; } catch { return false; }
 }
 
 /**
- * The MCP server's one dependency, for a worktree or a fresh clone that has none:
- * linked from the main checkout when it has it (instant, offline), else installed
- * from the lockfile. Everything it prints goes to stderr: stdout is the MCP channel.
+ * The dependencies of the MCP server, which imports @modelcontextprotocol/server, for a
+ * worktree or a fresh clone that has none: linked from the main checkout when it has them
+ * (instant, offline), else installed from the lockfile without the dev dependencies, which
+ * only the tests use. Everything it prints goes to stderr: stdout is the MCP channel.
  */
 function ensureDeps() {
   const pkg = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -39,13 +40,13 @@ function ensureDeps() {
     const git = args => execFileSync('git', args, { cwd: pkg, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     const main = dirname(git(['rev-parse', '--path-format=absolute', '--git-common-dir']));
     const theirs = join(main, relative(git(['rev-parse', '--show-toplevel']), pkg), 'node_modules');
-    if (theirs !== mods && !existsSync(mods) && existsSync(join(theirs, '@modelcontextprotocol/sdk'))) {
+    if (theirs !== mods && !existsSync(mods) && existsSync(join(theirs, '@modelcontextprotocol/server'))) {
       symlinkSync(theirs, mods, 'dir');
       return;
     }
   } catch { /* not a git checkout: install below */ }
   process.stderr.write('ds-enforcer: installing the MCP server\'s dependencies (npm ci)\n');
-  spawnSync('npm', ['ci', '--prefix', pkg, '--no-audit', '--no-fund', '--silent'], { stdio: ['ignore', 2, 2] });
+  spawnSync('npm', ['ci', '--prefix', pkg, '--omit=dev', '--no-audit', '--no-fund', '--silent'], { stdio: ['ignore', 2, 2] });
 }
 
 const [cmd, ...rest] = process.argv.slice(2);

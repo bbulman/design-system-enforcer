@@ -1,6 +1,6 @@
 {
   "name": "design-system-enforcer",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "MCP server, command line and Claude Code hooks that hold code to a project's own design system: its tokens, components and patterns",
   "type": "module",
   "main": "index.js",
@@ -56,6 +56,10 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@modelcontextprotocol/server": "^2.4.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.4.0"
   }
 }

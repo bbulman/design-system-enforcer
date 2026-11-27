@@ -110,6 +110,12 @@ The generated files rebuild themselves when a connected source changes. Commit t
 
 With the optional component gate switched on, four more are listed: `consult_ui`, `record_case`, `apply_review` and `scan_components`. See [the component gate](#the-component-gate-optional).
 
+Every tool has a `title` and MCP annotations. The tools that only read (`validate_file`, `audit_page`, `check_snippet`, `a11y_review`, `list_components`, `list_tokens`, `suggest_component`, `native_apps` and the gate's `consult_ui`) carry `readOnlyHint`, so a client may run them in parallel or without an approval prompt. Every tool that writes a file is marked as writing, with `destructiveHint` on those that rewrite what is already there (`init`, `fix_file`, `report`, `apply_report` and the gate's `apply_review`). None reaches the network (`openWorldHint: false`).
+
+Three calls ask you through an MCP form before they act, where the client supports forms: `apply_report` with `accept_rest`, before it moves the unticked findings into the baseline; `init` with `replace`, before it replaces a hand-written `enforcer.config.json` (a config kept somewhere other than the project root stays as it is, and the root config `init` writes takes over from it); and `init` with `hook`, before it adds the edit hook to `.claude/settings.local.json`, unless both of its entries are there already. Each question is tied to exactly the findings or files it covers, so if they change before you answer, you are asked again rather than the old answer being applied. A client without forms is never sent one, and the call works as it did before version 1.5.0: it goes ahead, and the tool descriptions tell the agent to get your say-so in chat first.
+
+The server speaks MCP over stdio at four protocol revisions. It answers `initialize` at 2024-11-05, 2025-06-18 and 2025-11-25, and `server/discover` at 2026-07-28, so a client on the newest revision and one that still opens at an older one both connect.
+
 ## Command line
 
 ```text
@@ -254,8 +260,9 @@ Every setting, with its default, is in [docs/configuration.md](docs/configuratio
 - `validate_file`, `audit_page`, `a11y_review` and `fix_file` read, and `fix_file` writes, only inside the project. Absolute paths elsewhere and `..` escapes are refused.
 - The checklist report, and the files its items name, are written and read only where their real path is inside the project, so a symlink in the project can't lead out of it.
 - `fix_file` only applies swaps with exactly one right answer, and never touches Swift.
-- The MCP server makes no network calls. It runs no other program, except `git ls-files` when the component gate's `scan_components` runs. Started through `bin/ds-enforcer.mjs` in a fresh clone, it first installs its one dependency with `npm ci`.
+- The MCP server makes no network calls. It runs no other program, except `git ls-files` when the component gate's `scan_components` runs. Started through `bin/ds-enforcer.mjs` in a fresh clone, it first installs its dependencies from the lockfile with `npm ci --omit=dev`.
 - `init` writes only `enforcer.config.json`, `.ds-enforcer/` and, if you say yes, the two hook entries in `.claude/settings.local.json`, keeping everything else there.
+- Where the client supports forms, the three calls that ask (see [MCP tools](#mcp-tools)) change nothing they ask about until you answer, when there is something to confirm (`apply_report` may still refresh the derived catalog in `.ds-enforcer/` before it asks), and only an accepted form with Yes ticked lets the step it asks about happen. Declining or cancelling the form is a no, and a no stops only that step: `apply_report` still applies the ticked fixes, `init` still connects without the hook, and a no to replacing a hand-written config leaves the project as it was.
 - No hook calls a model.
 
 ## What it can't see

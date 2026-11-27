@@ -17,6 +17,7 @@
 import { readFileSync, writeFileSync, existsSync, statSync } from 'fs';
 import { resolve, extname } from 'path';
 import { EXTS, loadEngine } from './check.mjs';
+import { fingerprint } from './fingerprint.mjs';
 
 export const DEFAULT_REPORT = 'design-system-report.md';
 const ITEM = /^- \[( |x|X)\] (.*?)\s*<!-- dse (\{.*\}) -->\s*$/;
@@ -164,22 +165,50 @@ function applyFix(lines, item) {
   return false;
 }
 
-/**
- * Work through the ticked items: apply the auto fixes, re-check every file a ticked
- * item is in, mark what is fixed, and return the ticked Claude items still to do.
- * `select` ticks items first: ids ("R4"), "auto" or "all".
- */
-export async function applyReport({ report, select = [], acceptRest = false } = {}) {
-  const engine = await loadEngine();
+/* engine is null when the project is not connected; anything with projectPath and insideProjectReal will do. */
+function openReport(engine, report) {
   if (!engine) throw new Error('This project is not connected to a design system yet. Run init first.');
   const path = reportPath(engine, report);
   if (!existsSync(path)) throw new Error(`No report at ${report || DEFAULT_REPORT}. Write one first (ds-enforcer report).`);
-  const text = readFileSync(path, 'utf8');
-  const { lines, items } = parseReport(text);
+  return { path, ...parseReport(readFileSync(path, 'utf8')) };
+}
+
+/** Tick the items `select` names: ids ("R4"), "auto" or "all". */
+export function tickSelected(items, select = []) {
   const wanted = new Set(select.map(s => String(s).toUpperCase()));
   for (const it of items) {
     if (wanted.has('ALL') || wanted.has(it.id) || (wanted.has('AUTO') && it.kind === 'auto')) it.ticked = true;
   }
+  return items;
+}
+
+const isRest = it => !it.ticked && it.status !== '☑️ accepted';
+
+const fingerprintOf = rest => fingerprint(...rest.map(it => `${it.file}|${it.type}|${it.match ?? ''}|${it.line}`).sort());
+
+/**
+ * The items applyReport with acceptRest would move into the baseline, and a fingerprint of
+ * them that changes when the set does. It reads the report and writes nothing.
+ */
+export async function restToAccept({ report, select = [] } = {}) {
+  // Not loadEngine: it regenerates the catalog, and this runs before the person is asked.
+  const cfg = await import('./config.js');
+  const { items } = openReport(cfg.connected ? cfg : null, report);
+  const rest = tickSelected(items, select).filter(isRest);
+  return { items: rest, fingerprint: fingerprintOf(rest) };
+}
+
+/**
+ * Work through the ticked items: apply the auto fixes, re-check every file a ticked
+ * item is in, mark what is fixed, and return the ticked Claude items still to do.
+ * `select` ticks items first: ids ("R4"), "auto" or "all". With restFingerprint,
+ * acceptRest moves the rest only while it is still the set that fingerprint names
+ * (restToAccept's), and otherwise moves nothing and returns acceptSkipped.
+ */
+export async function applyReport({ report, select = [], acceptRest = false, restFingerprint } = {}) {
+  const engine = await loadEngine();
+  const { path, lines, items } = openReport(engine, report);
+  tickSelected(items, select);
 
   const todo = items.filter(it => it.ticked && it.status !== '✅ fixed');
   const byFile = new Map();
@@ -212,11 +241,12 @@ export async function applyReport({ report, select = [], acceptRest = false } = 
   // Ticked boxes that had nothing to do (already fixed) keep their mark; ticks from `select` are written back.
   for (const it of items) if (it.ticked && !todo.includes(it) && it.status !== '✅ fixed') setLine(lines, it, { ticked: true, status: it.status });
 
-  let accepted = 0;
+  let accepted = 0, acceptSkipped = false;
   if (acceptRest) {
     const bl = await import('./baseline.js');
-    const rest = items.filter(it => !it.ticked && it.status !== '☑️ accepted');
-    if (rest.length) {
+    const rest = items.filter(isRest);
+    if (typeof restFingerprint === 'string' && fingerprintOf(rest) !== restFingerprint) acceptSkipped = true;
+    else if (rest.length) {
       const current = bl.loadBaseline() || { counts: {} };
       const counts = { ...current.counts };
       for (const it of rest) {
@@ -240,7 +270,7 @@ export async function applyReport({ report, select = [], acceptRest = false } = 
     fixed: fixed.length, appliedAuto: applied.length,
     stillThere: todo.filter(it => !it.done && it.kind === 'auto').map(it => ({ id: it.id, file: it.file, line: it.line, why: missed.find(m => m.id === it.id)?.why || 'the check still finds it' })),
     forClaude: forClaude.map(({ id, file, line, message, suggestion, match }) => ({ id, file, line, message, suggestion, match })),
-    accepted,
+    accepted, acceptSkipped,
     unticked: items.filter(it => !it.ticked && it.status !== '☑️ accepted').length - accepted,
   };
 }

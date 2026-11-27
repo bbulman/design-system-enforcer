@@ -217,6 +217,20 @@ export function connect(root, { sources, rootPx = 16, rules = {}, replace = fals
   return { configPath: path, framework, ...generate(root, cfg) };
 }
 
+/* Which of the two entries installHook adds are in a parsed settings.local.json, matched by command. */
+function hookEntries(settings) {
+  const has = (list, re) => (list || []).some(e => (e.hooks || []).some(h => re.test(h.command || '')));
+  return { hasEdit: has(settings?.hooks?.PostToolUse, /ds-enforcer(\.mjs)?"? hook\b/), hasStop: has(settings?.hooks?.Stop, /ds-enforcer(\.mjs)?"? stop-hook\b/) };
+}
+
+/** Whether the project's .claude/settings.local.json holds both the edit hook and the Stop hook. */
+export function hookInstalled(root) {
+  try {
+    const { hasEdit, hasStop } = hookEntries(JSON.parse(readFileSync(join(root, '.claude', 'settings.local.json'), 'utf8')));
+    return hasEdit && hasStop;
+  } catch { return false; }
+}
+
 /**
  * Add the PostToolUse hook (check each edit) and the Stop hook (show the report when
  * Claude finishes, if anything is left) to the project's .claude/settings.local.json (personal, not
@@ -226,19 +240,17 @@ export function connect(root, { sources, rootPx = 16, rules = {}, replace = fals
 export function installHook(root) {
   const dir = join(root, '.claude');
   const path = join(dir, 'settings.local.json');
+  if (hookInstalled(root)) return { path, installed: false, reason: 'already installed' };
   let settings = {};
   if (existsSync(path)) {
     try { settings = JSON.parse(readFileSync(path, 'utf8')); } catch { return { path, installed: false, reason: 'its JSON did not parse, so it was left alone' }; }
   }
   const bin = resolve(import.meta.dirname, '..', 'bin', 'ds-enforcer.mjs');
   const command = `node "${bin}" hook`;
+  const { hasEdit, hasStop } = hookEntries(settings);
   settings.hooks ||= {};
   settings.hooks.PostToolUse ||= [];
   settings.hooks.Stop ||= [];
-  const has = (list, re) => list.some(e => (e.hooks || []).some(h => re.test(h.command || '')));
-  const hasEdit = has(settings.hooks.PostToolUse, /ds-enforcer(\.mjs)?"? hook\b/);
-  const hasStop = has(settings.hooks.Stop, /ds-enforcer(\.mjs)?"? stop-hook\b/);
-  if (hasEdit && hasStop) return { path, installed: false, reason: 'already installed' };
   if (!hasEdit) settings.hooks.PostToolUse.push({ matcher: 'Edit|Write|NotebookEdit', hooks: [{ type: 'command', command, timeout: 30 }] });
   if (!hasStop) settings.hooks.Stop.push({ hooks: [{ type: 'command', command: `node "${bin}" stop-hook`, timeout: 60 }] });
   mkdirSync(dir, { recursive: true });

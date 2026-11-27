@@ -22,13 +22,9 @@
  *   scan_components:   Component gate: suggest new components from bespoke patterns that keep reappearing
  *   apply_review:      Component gate: carry out the reviewer's decisions from the review page
  */
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
-import { readFileSync, writeFileSync, existsSync, statSync } from 'fs';
+import { Server } from '@modelcontextprotocol/server';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
+import { readFileSync, writeFileSync, existsSync, statSync, realpathSync } from 'fs';
 import { resolve, relative, isAbsolute, sep } from 'path';
 
 import { TokenParser } from './token-parser.js';
@@ -46,10 +42,11 @@ import { loadSearch } from './catalog-search.js';
 import { loadBaseline, splitByBaseline, relOf } from './baseline.js';
 import { driftFindings } from './drift.js';
 import { reviewA11y, tokenPairs } from './a11y.js';
-import { writeReport, applyReport, DEFAULT_REPORT } from './report.mjs';
+import { writeReport, applyReport, restToAccept, DEFAULT_REPORT } from './report.mjs';
+import { confirmations, fingerprint, hasForms } from './confirm.mjs';
 import { detect } from './init/detect.mjs';
 import { countFigma, folderFramework } from './init/importers.mjs';
-import { connect, generate, sourceStamp, installHook } from './init/build.mjs';
+import { connect, generate, sourceStamp, installHook, hookInstalled } from './init/build.mjs';
 import { gateSettings, projectCli, fileTypesText } from './gate/settings.mjs';
 import { consult, formatConsult } from './gate/consult.mjs';
 import { recordCase, recordedText, CaseInputError } from './gate/queue.mjs';
@@ -183,11 +180,7 @@ const INSTRUCTIONS = !connected ? UNCONNECTED_INSTRUCTIONS : CONNECTED_INSTRUCTI
 /* One version for the package, the plugin and the server: package.json's. */
 const VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
 
-// Create MCP server
-const server = new Server(
-  { name: config.name ? `${config.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-design-system-enforcer` : 'design-system-enforcer', version: VERSION },
-  { capabilities: { tools: {} }, instructions: INSTRUCTIONS }
-);
+const SERVER_INFO = { name: config.name ? `${config.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-design-system-enforcer` : 'design-system-enforcer', version: VERSION };
 
 // ─── Tool Definitions ───
 
@@ -198,11 +191,19 @@ const CLI = projectCli();
 /* The file types the gate holds to a consult, and those it only reports (componentGate.files). */
 const TYPES = fileTypesText();
 
+/* MCP tool annotations. A tool that writes any file is never marked read-only, since a client may run a
+   read-only tool without asking (Codex does). None of them reaches the network. A read can still
+   regenerate the derived catalog in .ds-enforcer/ when a connected source changed (syncSources). */
+const READS = { readOnlyHint: true, openWorldHint: false };
+const writes = ({ destructive, idempotent = false }) => ({ readOnlyHint: false, destructiveHint: destructive, idempotentHint: idempotent, openWorldHint: false });
+
 const TOOLS = [
   {
     name: 'init',
+    title: 'Connect the design system',
+    annotations: writes({ destructive: true }),
     description:
-      'Connect this project\'s existing, code-based design system: CSS variable files (Tailwind v4 @theme included), W3C design tokens / Style Dictionary JSON, and React component folders (shadcn/ui included). action "detect" (the default) scans the project and lists numbered sources, marking the suggested ones, plus the current connection. Show the user that list and ask: which sources to connect, what 1rem equals in px on their pages, and whether to flag pure black or pure white backgrounds. Then call action "connect" with their answers. action "sync" rebuilds the catalog from the connected sources.',
+      'Connect this project\'s existing, code-based design system: CSS variable files (Tailwind v4 @theme included), W3C design tokens / Style Dictionary JSON, and React component folders (shadcn/ui included). action "detect" (the default) scans the project and lists numbered sources, marking the suggested ones, plus the current connection. Show the user that list and ask: which sources to connect, what 1rem equals in px on their pages, and whether to flag pure black or pure white backgrounds. Then call action "connect" with their answers. action "sync" rebuilds the catalog from the connected sources. Where the client supports forms, connect also asks the user through a form before `replace: true` replaces a hand-written config or `hook: true` adds the hook.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -222,6 +223,8 @@ const TOOLS = [
   },
   {
     name: 'validate_file',
+    title: 'Validate a file',
+    annotations: READS,
     description:
       'Scan a CSS, PHP, JS or Swift file for design system violations. Returns all violations with line numbers, severity, and fix suggestions. A .swift file is checked against its native app in the manifest (theme-file drift from the web tokens, colour literals in views, fonts, pure black, Dynamic Type). Use this before committing code or when reviewing changes.',
     inputSchema: {
@@ -237,6 +240,8 @@ const TOOLS = [
   },
   {
     name: 'fix_file',
+    title: 'Fix a file',
+    annotations: writes({ destructive: true, idempotent: true }),
     description:
       'Auto-fix design system violations in a CSS, PHP or JS file. Replaces hardcoded hex colors with CSS variable tokens, hardcoded spacing with space tokens, and hardcoded radii with radius tokens. Only applies safe, unambiguous fixes. Returns a diff preview and writes the fixed file. Never rewrites Swift: for a .swift file it returns the violations to fix by hand.',
     inputSchema: {
@@ -257,6 +262,8 @@ const TOOLS = [
   },
   {
     name: 'audit_page',
+    title: 'Audit a file',
+    annotations: READS,
     description:
       'Generate a comprehensive compliance report for a CSS, PHP, JS or Swift file. Includes violation count by severity, breakdown by type, auto-fixable count, and every violation with its line and suggestion. Use this for full audits.',
     inputSchema: {
@@ -272,6 +279,8 @@ const TOOLS = [
   },
   {
     name: 'list_components',
+    title: 'List components',
+    annotations: READS,
     description:
       `List all available ${anyNamed()}design system components with their ${config.framework === 'php' ? 'PHP function ' : ''}signatures. Use this to find the right component for a UI element.`,
     inputSchema: {
@@ -286,6 +295,8 @@ const TOOLS = [
   },
   {
     name: 'list_tokens',
+    title: 'List tokens',
+    annotations: READS,
     description:
       'List the design system\'s tokens with their value, tier and purpose. Filter by category (colors, spacing, typography, shadows, radii), or pass a plain-language role (e.g. "danger text" or "card padding") for the best matches.',
     inputSchema: {
@@ -316,6 +327,8 @@ const TOOLS = [
   },
   {
     name: 'suggest_component',
+    title: 'Suggest a component',
+    annotations: READS,
     description:
       `Given a description of what UI element you need, suggest which ${anyNamed()}component to use, ranked from the catalog (summary, when-to-use, synonyms). Each suggestion carries option values and defaults from the catalog, the legacy lookalike to avoid, the alternatives to choose instead and when (insteadOf), and a playground preview URL, labelled curated (a hand-written fixture) or auto (built from the catalog entry). A request whose head noun is a page, screen or flow also gets the matching screen recipe, a runnable file with default, loading, empty and error previews, first when it outscores the components.`,
     inputSchema: {
@@ -331,6 +344,8 @@ const TOOLS = [
   },
   {
     name: 'check_snippet',
+    title: 'Check a snippet',
+    annotations: READS,
     description:
       'Validate a code snippet for design system compliance without needing a file. Pass CSS, PHP, JS or Swift code directly and get violations back. For Swift, pass file_path (the file the snippet is for) so the check knows the app and whether it is a theme file. Great for checking code before writing it to a file.',
     inputSchema: {
@@ -355,6 +370,8 @@ const TOOLS = [
   },
   {
     name: 'a11y_review',
+    title: 'Review accessibility',
+    annotations: READS,
     description:
       'Accessibility review of what the code shows: images without alt, buttons, links and form fields with no accessible name, clickable elements keyboard users can\'t use, positive tabindex, aria-hidden on focusable elements, skipped heading levels, links without href, <html> without lang, and the WCAG contrast ratio of text and background colours used together (Tailwind classes, inline styles, CSS rules). Pass file_path, or code with language. With tokens: true (or no file and no code), it audits the design system\'s own colour pairs (primary with primary-foreground and so on). It can\'t see the rendered page: check focus order, focus visibility, target size and screen-reader output in the browser.',
     inputSchema: {
@@ -369,6 +386,8 @@ const TOOLS = [
   },
   {
     name: 'report',
+    title: 'Write the checklist report',
+    annotations: writes({ destructive: true }),
     description:
       'Write the design system violations as a checklist: design-system-report.md at the project root, one checkbox per new finding, each marked auto (a swap with one right answer, which the enforcer applies) or Claude (needs judgment). Use when the user wants a report, a to-do list or a review of what to fix. Tell them where it is, how many items are auto, and that they can tick boxes in the file or tell you which to fix (by id, "all auto" or "all"). Then call apply_report.',
     inputSchema: {
@@ -383,8 +402,10 @@ const TOOLS = [
   },
   {
     name: 'apply_report',
+    title: 'Apply the checklist',
+    annotations: writes({ destructive: true }),
     description:
-      'Work through the checklist: ticks the items in select (ids like "R4", "auto" or "all") on top of the boxes the user ticked, applies the auto fixes, re-checks the files and marks fixed items done. Ticked Claude items come back as a list: make each change in the file (following its suggestion), then call apply_report again so the enforcer verifies and marks them. With accept_rest, unticked items go into the baseline.',
+      'Work through the checklist: ticks the items in select (ids like "R4", "auto" or "all") on top of the boxes the user ticked, applies the auto fixes, re-checks the files and marks fixed items done. Ticked Claude items come back as a list: make each change in the file (following its suggestion), then call apply_report again so the enforcer verifies and marks them. With accept_rest, unticked items go into the baseline. Where the client supports forms, the user is asked through a form first, before accept_rest moves any findings into the baseline.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -396,6 +417,8 @@ const TOOLS = [
   },
   {
     name: 'native_apps',
+    title: 'Show the native apps',
+    annotations: READS,
     description:
       `The native apps in the design-system manifest (${config.nativeManifest || 'nativeManifest in enforcer.config.json'}, native.apps). With no app: one line per app. With an app key: its full binding (source, theme files, token namespace, annotation style, how project files are added), build, run and screenshot commands, hazards, sanctioned scopes, and a live count of the native check\'s findings by rule with the drifted constants named. Call it before writing Swift.`,
     inputSchema: {
@@ -410,6 +433,8 @@ const TOOLS = [
   },
   {
     name: 'consult_ui',
+    title: 'Consult before building UI',
+    annotations: READS,
     description:
       `Call before adding markup to a page or stylesheet: pass the file and one plain-words description per UI piece you are about to build ("a status label on each team member row", "a confirm-before-delete dialog"). For each piece it lists the ${anyNamed()}components that could build it, with an example call, when to use it and when not to, and a preview link, or says nothing in the inventory fits. Build each piece with one of its candidates, or record a case with the piece id and your reason. Shell equivalent: ${CLI} consult --file <path> --piece "<description>".`,
     inputSchema: {
@@ -428,6 +453,8 @@ const TOOLS = [
   },
   {
     name: 'record_case',
+    title: 'Record a case for review',
+    annotations: writes({ destructive: false }),
     description:
       `Call when you keep your own markup for a piece instead of the components consult_ui offered, build a piece nothing in the inventory fits, or keep markup a design-system finding flagged. Pass the file, your reason, the markup you wrote, and either the piece id from consult_ui (P-...) or the finding key a finding message ends with, (finding: <key>). Only for a ${TYPES.gated} file the gate covers${TYPES.detected ? ` (lookalikes in ${TYPES.detected} files are only reported)` : ''}. The case waits for ${REVIEWER} on the review page, and its finding is not reported again until the decision is carried out. Shell equivalent: ${CLI} record-case --json \'{"file": "<path>", "reason": "<why>", "markup": "<what you wrote>", "piece_id": "<P-...>"}\'.`,
     inputSchema: {
@@ -446,6 +473,8 @@ const TOOLS = [
   },
   {
     name: 'scan_components',
+    title: 'Suggest new components',
+    annotations: writes({ destructive: false }),
     description:
       `Scan the codebase for bespoke patterns that keep reappearing with no component in the inventory (a class in three or more files, or one component word such as -menu across three or more bespoke classes), add the pieces agents built with nothing fitting and the cases ${REVIEWER} marked "should become a component", and list the suggested new components, the most used first, with the closest existing components and the review page link. With no paths it rescans and saves the list the review page shows; with paths it scans only those files or folders and saves nothing. Shell equivalent: ${CLI} suggest [--force] [paths...].`,
     inputSchema: {
@@ -461,6 +490,8 @@ const TOOLS = [
   },
   {
     name: 'apply_review',
+    title: 'Apply the review',
+    annotations: writes({ destructive: true }),
     description:
       `Call when ${REVIEWER} asks you to apply the design system review. It carries out the decisions saved on the review page: a case where ${REVIEWER} chose the component, or chose to undo an automatic swap, comes back as a list with the file, the line, the markup and the component call; make each change in the file by hand, then call apply_review again so the enforcer checks the file and marks the case. A kept case\'s finding goes into the baseline so it stops coming back; cases marked fine or to become a component are closed; cases left for later are not touched. Shell equivalent: ${CLI} apply-review.`,
     inputSchema: { type: 'object', properties: {} },
@@ -482,15 +513,21 @@ const GATE_TOOLS = new Set(['consult_ui', 'record_case', 'scan_components', 'app
 
 // ─── Tool Handlers ───
 
-server.setRequestHandler(ListToolsRequestSchema, () => ({
-  tools: gateSettings().enabled ? TOOLS : TOOLS.filter(t => !GATE_TOOLS.has(t.name)),
-}));
+/* Builds the Server and registers its handlers, nothing more: serveStdio builds one per connection,
+   and the design system above is loaded once for the whole process. */
+function buildServer() {
+  const server = new Server(SERVER_INFO, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
+  server.setRequestHandler('tools/list', () => ({
+    tools: gateSettings().enabled ? TOOLS : TOOLS.filter(t => !GATE_TOOLS.has(t.name)),
+  }));
+  server.setRequestHandler('tools/call', (request, ctx) => dispatch(request.params, { server, ctx }));
+  return server;
+}
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-
+/* call is { server, ctx }: what a handler needs to ask the client a question. */
+async function dispatch({ name, arguments: args }, call) {
   try {
-    if (name === 'init') return await handleInit(args);
+    if (name === 'init') return await handleInit(args, call);
     ensureFresh();
     if (!connected || !tokenParser) {
       return {
@@ -502,35 +539,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     switch (name) {
       case 'validate_file':
-        return handleValidateFile(args);
+        return handleValidateFile(args, call);
       case 'fix_file':
-        return handleFixFile(args);
+        return handleFixFile(args, call);
       case 'audit_page':
-        return handleAuditPage(args);
+        return handleAuditPage(args, call);
       case 'list_components':
-        return handleListComponents(args);
+        return handleListComponents(args, call);
       case 'list_tokens':
-        return handleListTokens(args);
+        return handleListTokens(args, call);
       case 'suggest_component':
-        return handleSuggestComponent(args);
+        return handleSuggestComponent(args, call);
       case 'check_snippet':
-        return handleCheckSnippet(args);
+        return handleCheckSnippet(args, call);
       case 'native_apps':
-        return handleNativeApps(args);
+        return handleNativeApps(args, call);
       case 'a11y_review':
-        return handleA11y(args);
+        return handleA11y(args, call);
       case 'report':
-        return await handleReport(args);
+        return await handleReport(args, call);
       case 'apply_report':
-        return await handleApplyReport(args);
+        return await handleApplyReport(args, call);
       case 'consult_ui':
-        return handleConsultUi(args);
+        return handleConsultUi(args, call);
       case 'record_case':
-        return handleRecordCase(args);
+        return handleRecordCase(args, call);
       case 'scan_components':
-        return handleScanComponents(args);
+        return handleScanComponents(args, call);
       case 'apply_review':
-        return await handleApplyReview();
+        return await handleApplyReview(args, call);
       default:
         return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
     }
@@ -540,7 +577,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
-});
+}
 
 // ─── Handler Implementations ───
 
@@ -559,6 +596,14 @@ class OutsideProjectError extends Error {
   }
 }
 
+/** A file's findings, the catalog's token drift included, and which of them the project's baseline already holds. */
+function fileFindings(fullPath, content) {
+  const violations = [...validateFile(content, fullPath, tokenParser, componentRegistry, nativeCtx), ...(driftFindings(tokenParser.data?.catalog)[relOf(fullPath)] || [])];
+  const baseline = loadBaseline();
+  const existing = new Set(baseline ? splitByBaseline(relOf(fullPath), violations, baseline).existing : []);
+  return { violations, existing, hasBaseline: !!baseline };
+}
+
 function handleValidateFile({ file_path }) {
   const fullPath = resolvePath(file_path);
   if (!existsSync(fullPath)) {
@@ -566,7 +611,7 @@ function handleValidateFile({ file_path }) {
   }
 
   const content = readFileSync(fullPath, 'utf-8');
-  const violations = [...validateFile(content, fullPath, tokenParser, componentRegistry, nativeCtx), ...(driftFindings(tokenParser.data?.catalog)[relOf(fullPath)] || [])];
+  const { violations, existing, hasBaseline } = fileFindings(fullPath, content);
 
   if (violations.length === 0) {
     return {
@@ -585,9 +630,7 @@ function handleValidateFile({ file_path }) {
   let output = `## Design System Violations: ${file_path}\n\n`;
   output += `**${violations.length} violations** found (${high} high, ${medium} medium, ${low} low) | ${fixable} auto-fixable\n\n`;
   // With a baseline, say which findings were already there, so new work is judged on what it added.
-  const baseline = loadBaseline();
-  const existing = new Set(baseline ? splitByBaseline(relOf(fullPath), violations, baseline).existing : []);
-  if (baseline) output += `${violations.length - existing.size} new; ${existing.size} already in the project's baseline (marked *existing*). Fix the new ones.\n\n`;
+  if (hasBaseline) output += `${violations.length - existing.size} new; ${existing.size} already in the project's baseline (marked *existing*). Fix the new ones.\n\n`;
 
   // Group by severity
   for (const severity of ['high', 'medium', 'low']) {
@@ -676,7 +719,7 @@ function handleAuditPage({ file_path }) {
   }
 
   const content = readFileSync(fullPath, 'utf-8');
-  const violations = validateFile(content, fullPath, tokenParser, componentRegistry, nativeCtx);
+  const { violations, existing, hasBaseline } = fileFindings(fullPath, content);
   const report = generateReport(violations, file_path);
 
   let output = `## Compliance Audit: ${file_path}\n\n`;
@@ -696,6 +739,7 @@ function handleAuditPage({ file_path }) {
   output += `| Medium severity | ${report.bySeverity.medium} |\n`;
   output += `| Low severity | ${report.bySeverity.low} |\n`;
   output += `| Auto-fixable | ${report.autoFixable} |\n\n`;
+  if (hasBaseline) output += `${violations.length - existing.size} new; ${existing.size} already in the project's baseline.\n\n`;
 
   output += `### By Type\n\n`;
   for (const [type, count] of Object.entries(report.byType)) {
@@ -703,13 +747,15 @@ function handleAuditPage({ file_path }) {
   }
 
   output += `\n### All Violations\n\n`;
-  for (const v of report.violations) {
+  // The originals, not report.violations: the report's entries are copies, and the baseline marks are held by identity.
+  for (const v of violations) {
     const icon = v.severity === 'high' ? 'x' : v.severity === 'medium' ? '!' : '-';
     output += `[${icon}] Line ${v.line} (${v.severity}): ${v.message}`;
     if (v.match) output += ` — \`${v.match}\``;
     output += `\n`;
     output += `    ${v.suggestion}`;
     if (v.autoFixable) output += ` [auto-fixable]`;
+    if (existing.has(v)) output += ` [existing]`;
     output += `\n`;
   }
 
@@ -1115,18 +1161,36 @@ function handleNativeApps({ app } = {}) {
 
 async function handleReport({ paths = [], min, a11y, out } = {}) {
   for (const p of paths) resolvePath(p); // refuses paths outside the project
-  const r = await writeReport({ targets: paths, base: PROJECT_ROOT, min, a11y, out });
+  const r = await writeReport({ targets: paths, base: PROJECT_ROOT, min, a11y, out, keepTicks: true });
   const text = r.total
     ? `Wrote \`${r.rel}\`: ${r.total} finding${r.total === 1 ? '' : 's'} in ${r.files} file${r.files === 1 ? '' : 's'}. ${r.auto} are **auto** (the enforcer makes the swap itself); ${r.total - r.auto} are for **Claude** (they need judgment, and the enforcer checks the result).\n\nThe user can tick boxes in the file, or tell you which to fix: ids like R1 and R4, "all auto", or "all". Then call apply_report with those in select.`
     : `Wrote \`${r.rel}\`: nothing to fix.`;
   return { content: [{ type: 'text', text }] };
 }
 
-async function handleApplyReport({ select = [], accept_rest = false, report } = {}) {
-  const r = await applyReport({ report, select, acceptRest: accept_rest });
+async function handleApplyReport({ select = [], accept_rest = false, report } = {}, { server, ctx }) {
+  let answer = 'unasked', restFingerprint;
+  if (accept_rest) {
+    const rest = await restToAccept({ report, select });
+    const n = rest.items.length;
+    if (n) {
+      const key = `accept_rest:${rest.fingerprint}`;
+      const asked = confirmations(server, ctx, [{ key, message: `Move ${n} unticked finding${n === 1 ? '' : 's'} in ${report || DEFAULT_REPORT} into the baseline? They will stop being reported.` }]);
+      if (asked.ask) return asked.ask;
+      answer = asked.answers[key];
+      if (answer === 'yes') restFingerprint = rest.fingerprint;
+    } else if (hasForms(server, ctx)) {
+      // No question, yet the call still covers only the empty set: applyReport reads the report again,
+      // and a finding unticked before that read (another session's Stop hook) was never asked about.
+      restFingerprint = rest.fingerprint;
+    }
+  }
+  const r = await applyReport({ report, select, acceptRest: accept_rest && answer !== 'no', restFingerprint });
   let text = `## Applied \`${r.report}\`\n\n- **Fixed**: ${r.fixed} (${r.appliedAuto} applied by the enforcer)\n`;
   if (r.stillThere.length) text += `- **Still there**: ${r.stillThere.map(s => `${s.id} (${s.file}:${s.line}, ${s.why})`).join('; ')}\n`;
   if (r.accepted) text += `- **Accepted into the baseline**: ${r.accepted}\n`;
+  if (answer === 'no') text += '- **Not moved into the baseline**: the form came back without a yes (declined, dismissed, or answered automatically by the client). If no form appeared, the user can run `ds-enforcer apply --accept-rest` on the command line.\n';
+  if (r.acceptSkipped) text += '- **Not moved into the baseline**: the unticked findings changed while apply_report was running; call apply_report again to be asked about the current findings.\n';
   if (r.unticked > 0) text += `- **Not ticked**: ${r.unticked}\n`;
   if (r.forClaude.length) {
     text += `\n### For you to fix (${r.forClaude.length})\n\nMake each change, then call apply_report again to verify and mark it.\n\n`;
@@ -1203,7 +1267,7 @@ async function reconnect() {
   loaded.native = nativeStamp();
 }
 
-async function handleInit({ action = 'detect', sources, rootPx, pureBlack, pureWhite, replace, hook } = {}) {
+async function handleInit({ action = 'detect', sources, rootPx, pureBlack, pureWhite, replace, hook } = {}, { server, ctx }) {
   const root = connected ? PROJECT_ROOT : PROJECT_DIR;
   const handWritten = connected && !config.sources?.length;
 
@@ -1256,6 +1320,33 @@ async function handleInit({ action = 'detect', sources, rootPx, pureBlack, pureW
       chosen.push({ type, path: relativeTo(root, abs) });
     }
   }
+  // connect would throw this after the questions, so a yes to any of them could only fail.
+  if (!chosen.length) return { content: [{ type: 'text', text: 'Choose at least one source to connect.' }], isError: true };
+  // connect writes the config at the project root. A hand-written one elsewhere (beside the enforcer)
+  // stays, and the new one takes over from it as the nearer config.
+  const rootConfig = resolve(root, 'enforcer.config.json');
+  const settingsPath = resolve(root, '.claude', 'settings.local.json');
+  const hookThere = Boolean(hook) && hookInstalled(root);
+  const keys = {}, asks = [];
+  if (replace && handWritten) {
+    keys.replace = `replace:${fingerprint(textOrNone(CONFIG_PATH), textOrNone(rootConfig), ...chosen.map(s => s.path).sort())}`;
+    asks.push({ key: keys.replace, message: sameFile(CONFIG_PATH, rootConfig)
+      ? `Replace the hand-written ${CONFIG_PATH} with a config built from the chosen sources?`
+      : `Write ${rootConfig}, a config built from the chosen sources? It takes over from the hand-written ${CONFIG_PATH}, which stays as it is.` });
+  }
+  if (hook && !hookThere) {
+    keys.hook = `hook:${fingerprint(textOrNone(settingsPath))}`;
+    asks.push({ key: keys.hook, message: 'Add a hook to .claude/settings.local.json that checks each file after Claude edits it?' });
+  }
+  let answers = {};
+  if (asks.length) {
+    const asked = confirmations(server, ctx, asks);
+    if (asked.ask) return asked.ask;
+    answers = asked.answers;
+  }
+  if (answers[keys.replace] === 'no') {
+    return { content: [{ type: 'text', text: `Not connected: the form came back without a yes, so the hand-written ${CONFIG_PATH} stays as it is, and no hook was added either.` }], isError: true };
+  }
   const r = connect(root, { sources: chosen, rootPx, rules: { pureBlack, pureWhite }, replace: Boolean(replace) });
   await reconnect();
   let out = `## Connected (${r.framework})\n\n`;
@@ -1267,7 +1358,9 @@ async function handleInit({ action = 'detect', sources, rootPx, pureBlack, pureW
   if (r.drift?.length) out += `- **Drift**: ${r.drift.length} token${r.drift.length === 1 ? ' differs' : 's differ'} between sources, e.g. \`${r.drift[0].token}\`: ${r.drift[0].values.map(v => `${v.value} in ${v.type === 'figma' ? 'Figma' : v.path}`).join(' vs ')}. validate_file on the token file lists them all\n`;
   if (r.nativeApps) out += `- **Native**: ${r.nativeApps} SwiftUI app${r.nativeApps === 1 ? '' : 's'}; native_apps shows each one, and their theme colours are checked against the web tokens\n`;
   if (r.onlyInFigma) out += `- **Figma only**: ${r.onlyInFigma} Figma variable${r.onlyInFigma === 1 ? ' has' : 's have'} no matching code token\n`;
-  if (hook) {
+  if (hookThere) out += `- **Hook**: already installed in \`${relativeTo(root, settingsPath)}\`\n`;
+  else if (hook && answers[keys.hook] === 'no') out += '- **Hook**: not added (the form came back without a yes)\n';
+  else if (hook) {
     const h = installHook(root);
     out += h.installed ? `- **Hook**: added to \`${relativeTo(root, h.path)}\`; it takes effect once Claude Code restarts\n` : `- **Hook**: not added (${h.reason})\n`;
   }
@@ -1276,13 +1369,15 @@ async function handleInit({ action = 'detect', sources, rootPx, pureBlack, pureW
 }
 
 const relativeTo = (root, abs) => relative(root, abs).split(sep).join('/');
+const textOrNone = path => (path && existsSync(path) ? readFileSync(path, 'utf-8') : 'none');
+/* One file when their real paths match, so a symlinked config counts; a path not there yet is only itself. */
+const sameFile = (a, b) => { try { return realpathSync(a) === realpathSync(b); } catch { return resolve(a) === resolve(b); } };
 const insideProjectOf = (root, abs) => { const rel = relative(root, abs); return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)); };
 
 // ─── Start Server ───
 
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  serveStdio(() => buildServer());
   console.error(`${config.name ? `${config.name} ` : ''}Design System Enforcer MCP server running`);
   if (tokenParser) console.error(`Loaded: ${tokenParser.getStats().totalTokens} tokens, ${componentRegistry.components.size} components`);
   else console.error(connected ? `Not loaded: ${loadError}` : 'Not connected yet: the init tool connects this project');

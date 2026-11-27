@@ -13,6 +13,7 @@ import { spawnSync, spawn } from 'node:child_process';
 import { cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, appendFileSync, existsSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
@@ -289,21 +290,82 @@ test('check: an unconnected project exits 2', () => {
   ok(run(empty, ['check']).code === 2, 'expected exit 2');
 });
 
-/* An MCP session against a project: { init, tools, call(name, args), close }. */
-async function mcpSession(cwd, { server = join(ROOT, 'index.js') } = {}) {
-  const p = spawn(process.execPath, [server], { cwd, env: { ...env, CLAUDE_PROJECT_DIR: cwd }, stdio: ['pipe', 'pipe', 'pipe'] });
-  let buf = '', err = ''; const waiting = new Map(); let id = 0;
-  p.stdout.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); try { const m = JSON.parse(line); waiting.get(m.id)?.(m); } catch {} } });
+/* An MCP session against a project in a 2025-era handshake: { init, tools, call(name, args), asked(), answerErrors(), close }.
+   Each request the server sends the client is answered with answer(message), and its method is kept for asked().
+   An answer that throws is sent to the server as a JSON-RPC error and its message kept for answerErrors(), so the
+   test that used it fails on its own assertions instead of the run crashing. A preload is a module node imports
+   before the server (--import), which can reach into the server's process. */
+async function mcpSession(cwd, { server = join(ROOT, 'index.js'), protocolVersion = '2024-11-05', capabilities = {}, answer = () => ({}), preload } = {}) {
+  const p = spawn(process.execPath, [...(preload ? ['--import', pathToFileURL(preload).href] : []), server], { cwd, env: { ...env, CLAUDE_PROJECT_DIR: cwd }, stdio: ['pipe', 'pipe', 'pipe'] });
+  let buf = '', err = ''; const waiting = new Map(); let id = 0; const asked = [], answerErrors = [];
+  const send = m => p.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\n');
+  p.stdout.on('data', d => {
+    buf += d; let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      let m; try { m = JSON.parse(line); } catch { continue; }
+      if (m.method && m.id !== undefined) {
+        asked.push(m.method);
+        Promise.resolve().then(() => answer(m)).then(result => send({ id: m.id, result }), error => {
+          const message = error instanceof Error ? error.message : String(error);
+          answerErrors.push(message);
+          send({ id: m.id, error: { code: -32603, message: `The test's answer threw: ${message}` } });
+        });
+        continue;
+      }
+      waiting.get(m.id)?.(m);
+    }
+  });
   p.stderr.on('data', d => { err += d; });
-  const req = (method, params) => new Promise(r => { const n = ++id; waiting.set(n, r); p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: n, method, params }) + '\n'); });
-  const init = (await req('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } })).result;
-  p.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+  const req = (method, params) => new Promise(r => { const n = ++id; waiting.set(n, r); send({ id: n, method, params }); });
+  const init = (await req('initialize', { protocolVersion, capabilities, clientInfo: { name: 'test', version: '1' } })).result;
+  send({ method: 'notifications/initialized' });
   const tools = (await req('tools/list', {})).result.tools;
-  return { init, tools, stderr: () => err, call: async (name, args) => (await req('tools/call', { name, arguments: args })).result, close: () => p.kill() };
+  return { init, tools, stderr: () => err, asked: () => [...asked], answerErrors: () => [...answerErrors], call: async (name, args) => (await req('tools/call', { name, arguments: args })).result, close: () => p.kill() };
 }
 
+/* A 2026-07-28 session through the v2 client, pinned so it never falls back to a handshake: { client, list(),
+   call(name, args), close }, where list and call resolve to { error } (the message) instead of rejecting;
+   { error } when the server does not connect, so the test fails rather than the run; or null when
+   @modelcontextprotocol/client (a dev dependency) is not installed. With elicit, the client declares forms
+   and answers each one with elicit(params), counting them in client.asked. */
+async function modernSession(cwd, { elicit } = {}) {
+  let Client, StdioClientTransport;
+  try {
+    ({ Client } = await import('@modelcontextprotocol/client'));
+    ({ StdioClientTransport } = await import('@modelcontextprotocol/client/stdio'));
+  } catch { return null; }
+  const client = new Client({ name: 'test', version: '1' }, { capabilities: elicit ? { elicitation: { form: {} } } : {}, versionNegotiation: { mode: { pin: '2026-07-28' } } });
+  client.asked = 0;
+  if (elicit) client.setRequestHandler('elicitation/create', request => { client.asked++; return elicit(request.params); });
+  try {
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(ROOT, 'index.js')], cwd, env: { ...env, CLAUDE_PROJECT_DIR: cwd }, stderr: 'ignore' }));
+  } catch (error) {
+    await client.close().catch(() => {});
+    return { error: error.message };
+  }
+  const safely = promise => promise.catch(error => ({ error: error instanceof Error ? error.message : String(error) }));
+  return {
+    client,
+    list: () => safely(client.listTools()),
+    call: (name, args) => safely(client.callTool({ name, arguments: args })),
+    close: () => client.close().catch(() => {}),
+  };
+}
+
+/* A fresh copy with a checklist of every finding in src, nothing ticked and no baseline yet. */
+function acceptRestProject() {
+  const p = project('react-tailwind');
+  run(p, ['init', '--yes']);
+  run(p, ['report', 'src']);
+  return p;
+}
+const baselined = p => run(p, ['check', 'src']).code === 0;
+const YES = { action: 'accept', content: { confirm: true } };
+const textOf = result => result?.content?.[0]?.text ?? JSON.stringify(result);
+
 async function mcp() {
-  if (!existsSync(join(ROOT, 'node_modules', '@modelcontextprotocol'))) { console.log('SKIP  mcp: run npm install to test the server'); return; }
+  if (!existsSync(join(ROOT, 'node_modules', '@modelcontextprotocol', 'server', 'package.json'))) { console.log('SKIP  mcp: run npm install to test the server'); return; }
   const s = await mcpSession(react);
   const tools = s.tools.map(t => t.name);
   test('mcp: all twelve tools are listed', () => ok(['init', 'suggest_component', 'list_components', 'list_tokens', 'validate_file', 'check_snippet', 'audit_page', 'fix_file', 'a11y_review', 'native_apps', 'report', 'apply_report'].every(t => tools.includes(t)), `tools: ${tools.join(', ')}`));
@@ -313,6 +375,33 @@ async function mcp() {
     ok(s.init.serverInfo.name === 'design-system-enforcer', s.init.serverInfo.name);
     ok(/^Design system enforcer\. Before writing UI, find what exists/.test(s.init.instructions), s.init.instructions);
   });
+  const shape = tools => JSON.stringify(tools.map(t => [t.name, t.annotations]));
+  const older = [];
+  for (const protocolVersion of ['2025-06-18', '2025-11-25']) {
+    const o = await mcpSession(react, { protocolVersion });
+    older.push([protocolVersion, o.init.protocolVersion, shape(o.tools)]);
+    o.close();
+  }
+  test('mcp: the server speaks 2025-06-18 and 2025-11-25 as well as 2024-11-05', () => {
+    for (const [asked, got, tools] of older) ok(got === asked && tools === shape(s.tools), `${asked}: got ${got}`);
+  });
+
+  const modern = await modernSession(react, {});
+  if (!modern) console.log('SKIP  mcp: install @modelcontextprotocol/client to test 2026-07-28');
+  else {
+    const modernTools = modern.client && await modern.list();
+    const modernPairs = modern.client && await modern.call('a11y_review', { tokens: true });
+    test('mcp: a 2026-07-28 client discovers the server, its instructions and its annotated tools', () => {
+      ok(!modern.error, modern.error);
+      ok(modern.client.getNegotiatedProtocolVersion() === '2026-07-28', modern.client.getNegotiatedProtocolVersion());
+      ok(modern.client.getInstructions().startsWith('Design system enforcer. Before writing UI'), modern.client.getInstructions());
+      ok(!modernTools.error, `tools/list: ${modernTools.error}`);
+      ok(shape(modernTools.tools) === shape(s.tools), 'tool lists differ between eras');
+      ok(!modernPairs.error, `a11y_review: ${modernPairs.error}`);
+      ok(/Colour pairs in the design system/.test(textOf(modernPairs)), 'a11y_review failed on 2026-07-28');
+    });
+    if (modern.client) await modern.close();
+  }
   const outside = await s.call('fix_file', { file_path: '/etc/hosts', dry_run: true });
   test('mcp: file tools refuse paths outside the project', () => ok(outside.isError && /outside the project/.test(outside.content[0].text), outside.content[0].text));
   // fix_file writes: a path inside the project that a symlink leads out of is refused, and nothing outside changes.
@@ -332,7 +421,317 @@ async function mcp() {
   test('mcp: a11y_review audits colour pairs', () => ok(/Colour pairs in the design system/.test(pairs.content[0].text), 'no pair audit'));
   const report = await s.call('report', { out: '../elsewhere.md' });
   test('mcp: the report tool refuses a report path outside the project', () => ok(report.isError && /Refused: \.\.\/elsewhere\.md is outside the project/.test(report.content[0].text), report.content[0].text));
+  const driftFile = rf.find(v => v.type === 'token-drift').file;
+  const driftAudit = (await s.call('audit_page', { file_path: driftFile })).content[0].text;
+  const pageAudit = (await s.call('audit_page', { file_path: 'src/app/page.tsx' })).content[0].text;
+  const pageCheck = (await s.call('validate_file', { file_path: 'src/app/page.tsx' })).content[0].text;
+  test('mcp: audit_page reports the drift and the baseline marks validate_file reports', () => {
+    ok(driftAudit.includes('--color-brand') && driftAudit.includes('Figma'), driftAudit);
+    ok(/1 new; \d+ already in the project's baseline/.test(pageAudit), pageAudit);
+    ok((pageAudit.match(/\[existing\]/g) || []).length === (pageCheck.match(/\*\(existing\)\*/g) || []).length, 'existing marks differ');
+  });
+  const reportPath = join(react, 'design-system-report.md');
+  await s.call('report', { paths: ['src'] });
+  const firstReport = readFileSync(reportPath, 'utf8');
+  writeFileSync(reportPath, firstReport.replace('- [ ]', '- [x]'));
+  await s.call('report', { paths: ['src'] });
+  test('mcp: a second report keeps the boxes ticked in the first', () => {
+    ok(/- \[ \] \*\*R\d+\*\*/.test(firstReport), 'the first report has no items to tick');
+    ok((readFileSync(reportPath, 'utf8').match(/- \[x\]/g) || []).length === 1, 'the ticked box was lost');
+  });
   s.close();
+
+  // accept_rest moves every unticked finding into the baseline, so it asks the person first where the client has forms.
+  const FORMS = { protocolVersion: '2025-06-18', capabilities: { elicitation: {} } };
+  {
+    const p = acceptRestProject();
+    const a = await mcpSession(p, { ...FORMS, answer: () => YES });
+    const r = await a.call('apply_report', { accept_rest: true });
+    a.close();
+    test('mcp: accept_rest asks first, and a yes moves the rest into the baseline', () => {
+      ok(JSON.stringify(a.asked()) === '["elicitation/create"]', `asked: ${a.asked().join(', ') || 'nothing'}`);
+      ok(baselined(p), `not baselined: ${textOf(r)}`);
+    });
+  }
+  {
+    const p = acceptRestProject();
+    const baselineFile = join(p, '.ds-enforcer/baseline.json');
+    const before = existsSync(baselineFile);
+    const a = await mcpSession(p, { ...FORMS, answer: () => ({ action: 'decline' }) });
+    const r = await a.call('apply_report', { accept_rest: true });
+    a.close();
+    test('mcp: a no leaves the baseline alone and says so', () => {
+      ok(!before && !existsSync(baselineFile), `baseline.json before: ${before}, after: ${existsSync(baselineFile)}`);
+      ok(!baselined(p), 'the rest was moved into the baseline');
+      ok(textOf(r).replace(/\*\*/g, '').includes('Not moved into the baseline: the form came back without a yes (declined, dismissed, or answered automatically by the client). If no form appeared, the user can run `ds-enforcer apply --accept-rest` on the command line.'), textOf(r));
+    });
+  }
+  {
+    const p = acceptRestProject();
+    const a = await mcpSession(p, { ...FORMS, answer: () => ({ action: 'accept', content: { confirm: 'true' } }) });
+    const r = await a.call('apply_report', { accept_rest: true });
+    a.close();
+    test('mcp: an answer that is not true counts as no', () => ok(!baselined(p), `baselined on confirm "true": ${textOf(r)}`));
+  }
+  {
+    const p = acceptRestProject();
+    const a = await mcpSession(p, { protocolVersion: '2025-06-18', capabilities: {} });
+    const r = await a.call('apply_report', { accept_rest: true });
+    a.close();
+    test('mcp: a client with no forms keeps today\'s behaviour', () => {
+      ok(a.asked().length === 0, `asked: ${a.asked().join(', ')}`);
+      ok(baselined(p), `not baselined: ${textOf(r)}`);
+    });
+  }
+  {
+    const p = acceptRestProject();
+    const m = await modernSession(p, { elicit: () => YES });
+    if (!m) console.log('SKIP  mcp: install @modelcontextprotocol/client to test a 2026-07-28 form');
+    else {
+      const r = m.client && await m.call('apply_report', { accept_rest: true });
+      if (m.client) await m.close();
+      test('mcp: a 2026-07-28 client confirms through a form', () => {
+        ok(!m.error, m.error);
+        ok(!r.error, `apply_report: ${r.error}`);
+        ok(m.client.asked === 1, `asked ${m.client.asked} times`);
+        ok(baselined(p), `not baselined: ${textOf(r)}`);
+      });
+    }
+  }
+  {
+    const p = acceptRestProject();
+    const reportFile = join(p, 'design-system-report.md');
+    const counts = [];
+    const a = await mcpSession(p, { ...FORMS, answer: m => {
+      counts.push(Number(/Move (\d+) unticked/.exec(m.params?.message)?.[1]));
+      if (counts.length === 1) writeFileSync(reportFile, readFileSync(reportFile, 'utf8').replace('- [ ]', '- [x]'));
+      return YES;
+    } });
+    const r = await a.call('apply_report', { accept_rest: true });
+    a.close();
+    test('mcp: a report that changes before the answer is asked about again', () => {
+      ok(a.asked().length === 2, `asked ${a.asked().length} times: ${a.answerErrors().join('; ')}`);
+      ok(counts[1] === counts[0] - 1, `counts asked about: ${counts.join(', ')}`);
+      ok(baselined(p), `not baselined: ${textOf(r)}`);
+    });
+  }
+  {
+    const p = acceptRestProject();
+    const reportFile = join(p, 'design-system-report.md');
+    writeFileSync(reportFile, readFileSync(reportFile, 'utf8').replaceAll('- [ ]', '- [x]'));
+    const a = await mcpSession(p, { ...FORMS, answer: () => YES });
+    const r = await a.call('apply_report', { accept_rest: true });
+    a.close();
+    test('mcp: nothing to move means no question', () => {
+      ok(a.asked().length === 0, `asked: ${a.asked().join(', ')}`);
+      ok(r && !r.isError, textOf(r));
+    });
+  }
+  {
+    // apply_report reads the report twice: once for the question and once to apply it. Another session's
+    // Stop hook can rewrite it in between; the preload stands in for that, unticking a finding just before
+    // the second read, which no client message can time.
+    const p = acceptRestProject();
+    const reportFile = join(p, 'design-system-report.md');
+    writeFileSync(reportFile, readFileSync(reportFile, 'utf8').replaceAll('- [ ]', '- [x]'));
+    const preload = join(realpathSync(mkdtempSync(join(tmpdir(), 'dse-race-'))), 'untick-between-reads.mjs');
+    temps.push(resolve(preload, '..'));
+    writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const target = ${JSON.stringify(reportFile)};
+const read = fs.readFileSync;
+let reads = 0;
+fs.readFileSync = function (path, ...rest) {
+  if (String(path) === target && ++reads === 2) {
+    fs.writeFileSync(target, read(target, 'utf8').replace('- [x]', '- [ ]'));
+    process.stderr.write('dse-race: unticked a finding before the second read of the report\\n');
+  }
+  return read.call(this, path, ...rest);
+};
+syncBuiltinESMExports();
+`);
+    const a = await mcpSession(p, { ...FORMS, answer: () => YES, preload });
+    const r = await a.call('apply_report', { accept_rest: true });
+    a.close();
+    test('mcp: with nothing to ask about, a finding unticked before the report is applied is not moved', () => {
+      ok(a.stderr().includes('dse-race: unticked a finding'), `the finding was never unticked: ${a.stderr()}`);
+      ok(a.asked().length === 0, `asked: ${a.asked().join(', ')}`);
+      ok(!existsSync(join(p, '.ds-enforcer/baseline.json')), `moved into the baseline unasked: ${textOf(r)}`);
+      ok(textOf(r).replace(/\*\*/g, '').includes('Not moved into the baseline: the unticked findings changed while apply_report was running'), textOf(r));
+    });
+  }
+
+  // init's connect replaces a hand-written config, and adds a hook, only with the person's yes where the client has forms.
+  const elicited = session => session.asked().filter(m => m === 'elicitation/create').length;
+  const replacedBy = (p, path) => JSON.parse(readFileSync(join(p, 'enforcer.config.json'), 'utf8')).sources?.some(s => s.path === path);
+  {
+    const p = project('kit');
+    const configFile = join(p, 'enforcer.config.json');
+    const before = readFileSync(configFile, 'utf8');
+    const a = await mcpSession(p, { ...FORMS, answer: () => ({ action: 'decline' }) });
+    const r = await a.call('init', { action: 'connect', sources: ['ds/tokens.css'], replace: true });
+    a.close();
+    test('mcp: init asks before replacing a hand-written config, and a no keeps it', () => {
+      ok(r?.isError && textOf(r) === `Not connected: the form came back without a yes, so the hand-written ${configFile} stays as it is, and no hook was added either.`, textOf(r));
+      ok(readFileSync(configFile, 'utf8') === before, 'the hand-written config was changed');
+      ok(elicited(a) === 1, `asked ${elicited(a)} times: ${a.answerErrors().join('; ')}`);
+    });
+  }
+  {
+    const p = project('kit');
+    const a = await mcpSession(p, { ...FORMS, answer: () => YES });
+    const r = await a.call('init', { action: 'connect', sources: ['ds/tokens.css'], replace: true, hook: true });
+    a.close();
+    test('mcp: replace and hook are asked together, in one round', () => {
+      ok(elicited(a) === 2, `asked ${elicited(a)} times: ${a.answerErrors().join('; ')}`);
+      ok(replacedBy(p, 'ds/tokens.css'), `the config was not replaced: ${textOf(r)}`);
+      ok(existsSync(join(p, '.claude/settings.local.json')), `no hook was added: ${textOf(r)}`);
+    });
+  }
+  {
+    const p = project('react-tailwind');
+    const settings = join(p, '.claude/settings.local.json');
+    const before = existsSync(settings);
+    const a = await mcpSession(p, { ...FORMS, answer: () => ({ action: 'decline' }) });
+    const r = await a.call('init', { action: 'connect', sources: reactConfig.sources.map(x => x.path), hook: true });
+    a.close();
+    test('mcp: a no to the hook connects without it', () => {
+      ok(!before && !existsSync(settings), `settings.local.json before: ${before}, after: ${existsSync(settings)}`);
+      ok(r && !r.isError && existsSync(join(p, 'enforcer.config.json')), `not connected: ${textOf(r)}`);
+      ok(textOf(r).includes('**Hook**: not added (the form came back without a yes)'), textOf(r));
+    });
+  }
+  {
+    const p = project('kit');
+    const a = await mcpSession(p, { protocolVersion: '2025-06-18', capabilities: {} });
+    const r = await a.call('init', { action: 'connect', sources: ['ds/tokens.css'], replace: true });
+    a.close();
+    test('mcp: a client with no forms connects as before', () => {
+      ok(a.asked().length === 0, `asked: ${a.asked().join(', ')}`);
+      ok(replacedBy(p, 'ds/tokens.css'), `the config was not replaced: ${textOf(r)}`);
+    });
+  }
+  {
+    const p = project('kit');
+    const configFile = join(p, 'enforcer.config.json');
+    let answered = 0;
+    const a = await mcpSession(p, { ...FORMS, answer: () => {
+      if (++answered === 1) appendFileSync(configFile, '\n');
+      return YES;
+    } });
+    const r = await a.call('init', { action: 'connect', sources: ['ds/tokens.css'], replace: true });
+    a.close();
+    test('mcp: a config that changes before the answer is asked about again', () => {
+      ok(elicited(a) === 2, `asked ${elicited(a)} times: ${a.answerErrors().join('; ')}`);
+      ok(replacedBy(p, 'ds/tokens.css'), `the config was not replaced: ${textOf(r)}`);
+    });
+  }
+  {
+    const p = project('kit');
+    const configFile = join(p, 'enforcer.config.json');
+    const before = readFileSync(configFile, 'utf8');
+    const a = await mcpSession(p, { ...FORMS, answer: m => (/hook/.test(m.params?.message) ? YES : { action: 'decline' }) });
+    const r = await a.call('init', { action: 'connect', sources: ['ds/tokens.css'], replace: true, hook: true });
+    a.close();
+    test('mcp: a no to replacing the config adds no hook, even with a yes to the hook', () => {
+      ok(elicited(a) === 2, `asked ${elicited(a)} times: ${a.answerErrors().join('; ')}`);
+      ok(r?.isError, textOf(r));
+      ok(readFileSync(configFile, 'utf8') === before, 'the hand-written config was changed');
+      ok(!existsSync(join(p, '.claude/settings.local.json')), 'a hook was added');
+    });
+  }
+  {
+    const p = project('kit');
+    const configFile = join(p, 'enforcer.config.json');
+    const before = readFileSync(configFile, 'utf8');
+    const a = await mcpSession(p, { ...FORMS, answer: () => YES });
+    const r = await a.call('init', { action: 'connect', sources: [], replace: true, hook: true });
+    a.close();
+    const q = project('react-tailwind');
+    const b = await mcpSession(q, { ...FORMS, answer: () => YES });
+    const hookOnly = await b.call('init', { action: 'connect', hook: true });
+    b.close();
+    test('mcp: init with no sources asks nothing, since a yes could only fail, and says to choose one', () => {
+      for (const [session, result] of [[a, r], [b, hookOnly]]) {
+        ok(session.asked().length === 0, `asked: ${session.asked().join(', ')}`);
+        ok(result?.isError && textOf(result) === 'Choose at least one source to connect.', textOf(result));
+      }
+      ok(readFileSync(configFile, 'utf8') === before, 'the hand-written config was changed');
+      ok(!existsSync(join(p, '.claude/settings.local.json')) && !existsSync(join(q, '.claude/settings.local.json')), 'a hook was added');
+      ok(!existsSync(join(q, 'enforcer.config.json')), 'the unconnected project was connected');
+    });
+  }
+  {
+    // The two entries init adds: the edit hook (PostToolUse) and the report (Stop).
+    const entries = {
+      PostToolUse: [{ matcher: 'Edit|Write|NotebookEdit', hooks: [{ type: 'command', command: `node "${BIN}" hook`, timeout: 30 }] }],
+      Stop: [{ hooks: [{ type: 'command', command: `node "${BIN}" stop-hook`, timeout: 60 }] }],
+    };
+    const withSettings = hooks => {
+      const p = project('react-tailwind');
+      mkdirSync(join(p, '.claude'));
+      writeFileSync(join(p, '.claude/settings.local.json'), JSON.stringify({ hooks }, null, 2) + '\n');
+      return p;
+    };
+    const sources = reactConfig.sources.map(x => x.path);
+    const full = withSettings(entries);
+    const before = readFileSync(join(full, '.claude/settings.local.json'), 'utf8');
+    const a = await mcpSession(full, { ...FORMS, answer: () => ({ action: 'decline' }) });
+    const r = await a.call('init', { action: 'connect', sources, hook: true });
+    a.close();
+    const half = withSettings({ PostToolUse: entries.PostToolUse });
+    const b = await mcpSession(half, { ...FORMS, answer: () => YES });
+    const rb = await b.call('init', { action: 'connect', sources, hook: true });
+    b.close();
+    test('mcp: init asks nothing about a hook already installed, and asks about one half installed', () => {
+      ok(a.asked().length === 0, `asked: ${a.asked().join(', ')}`);
+      ok(r && !r.isError && textOf(r).includes('**Hook**: already installed in `.claude/settings.local.json`'), textOf(r));
+      ok(readFileSync(join(full, '.claude/settings.local.json'), 'utf8') === before, 'the installed hook was rewritten');
+      ok(elicited(b) === 1, `asked ${elicited(b)} times about the half-installed hook: ${b.answerErrors().join('; ')}`);
+      const stop = JSON.parse(readFileSync(join(half, '.claude/settings.local.json'), 'utf8')).hooks.Stop || [];
+      ok(rb && !rb.isError && stop.some(e => e.hooks.some(h => /stop-hook/.test(h.command))), `the Stop hook was not added: ${textOf(rb)}`);
+    });
+  }
+  {
+    // Workshopr's shape: the hand-written config sits beside the enforcer and names the repository above it as
+    // the project, so connect writes a second config at the project root, which takes over as the nearer one.
+    const top = realpathSync(mkdtempSync(join(tmpdir(), 'dse-takeover-')));
+    temps.push(top);
+    const copy = join(top, 'vendor/tools/enforcer');
+    cpSync(ROOT, copy, { recursive: true, filter: src => !/[/\\](node_modules|test|tests|docs|\.git)$/.test(src) });
+    symlinkSync(join(ROOT, 'node_modules'), join(copy, 'node_modules'), 'dir');
+    const beside = join(copy, 'enforcer.config.json');
+    writeFileSync(beside, JSON.stringify({ ...JSON.parse(readFileSync(join(FIXTURES, 'kit/enforcer.config.json'), 'utf8')), projectRoot: '../../..' }));
+    cpSync(join(FIXTURES, 'kit'), top, { recursive: true });
+    rmSync(join(top, 'enforcer.config.json'));
+    mkdirSync(join(top, '.git'));
+    const atRoot = join(top, 'enforcer.config.json');
+    const besideBefore = readFileSync(beside, 'utf8');
+    const server = join(copy, 'index.js');
+    const args = { action: 'connect', sources: ['ds/tokens.css'], replace: true };
+    const no = await mcpSession(top, { server, ...FORMS, answer: () => ({ action: 'decline' }) });
+    const rNo = await no.call('init', args);
+    no.close();
+    const rootAfterNo = existsSync(atRoot);
+    const messages = [];
+    const yes = await mcpSession(top, { server, ...FORMS, answer: m => {
+      messages.push(m.params?.message);
+      if (messages.length === 1) writeFileSync(atRoot, '{}\n');
+      return YES;
+    } });
+    const rYes = await yes.call('init', args);
+    yes.close();
+    test('mcp: replacing a config that is not at the project root names the root one it writes, and a no writes neither', () => {
+      ok(rNo?.isError && textOf(rNo) === `Not connected: the form came back without a yes, so the hand-written ${beside} stays as it is, and no hook was added either.`, textOf(rNo));
+      ok(!rootAfterNo, 'a no wrote a config at the project root');
+      ok(messages[0] === `Write ${atRoot}, a config built from the chosen sources? It takes over from the hand-written ${beside}, which stays as it is.`, `asked: ${messages[0]}`);
+    });
+    test('mcp: the replace question is bound to the root config too, and a yes leaves the hand-written one as it was', () => {
+      ok(messages.length === 2, `asked ${messages.length} times: ${yes.answerErrors().join('; ')}`);
+      ok(!rYes?.isError && JSON.parse(readFileSync(atRoot, 'utf8')).sources?.some(s => s.path === 'ds/tokens.css'), `the root config was not written: ${textOf(rYes)}`);
+      ok(readFileSync(beside, 'utf8') === besideBefore, 'the hand-written config beside the enforcer was changed');
+    });
+  }
 
   const k = await mcpSession(kit);
   const byName = Object.fromEntries(k.tools.map(t => [t.name, t]));
@@ -343,6 +742,21 @@ async function mcp() {
     ok(byName.record_case.description.includes('The case waits for Rae on the review page'), byName.record_case.description);
     ok(byName.consult_ui.inputSchema.properties.file.description === 'Project-relative path of the file you are about to change, e.g. pages/team.php', byName.consult_ui.inputSchema.properties.file.description);
     ok(byName.list_tokens.description === 'List the kit fixture\'s tokens from ds/tokens.css.', byName.list_tokens.description);
+  });
+  // A client may run a read-only tool without asking, so a tool that writes any file must never be marked read-only.
+  const READ_ONLY = ['validate_file', 'audit_page', 'check_snippet', 'a11y_review', 'list_components', 'list_tokens', 'suggest_component', 'native_apps', 'consult_ui'];
+  const DESTRUCTIVE = ['init', 'fix_file', 'report', 'apply_report', 'apply_review'];
+  test('mcp kit: every tool has a title and annotations, and only the tools that write nothing are read-only', () => {
+    for (const name of [...READ_ONLY, ...DESTRUCTIVE]) ok(byName[name], `${name} is not listed`);
+    for (const t of k.tools) {
+      const a = t.annotations || {};
+      ok(typeof t.title === 'string' && t.title.trim(), `${t.name} has no title`);
+      ok(a.openWorldHint === false, `${t.name}: openWorldHint ${a.openWorldHint}`);
+      ok(a.readOnlyHint === READ_ONLY.includes(t.name), `${t.name}: readOnlyHint ${a.readOnlyHint}`);
+      if (!a.readOnlyHint) ok(a.destructiveHint === DESTRUCTIVE.includes(t.name), `${t.name}: destructiveHint ${a.destructiveHint}`);
+    }
+    ok(byName.fix_file.annotations.idempotentHint === true, 'fix_file is not idempotent');
+    ok(new Set(k.tools.map(t => t.title)).size === k.tools.length, 'two tools share a title');
   });
   test('mcp kit: the server is named for the project and speaks its instructions', () => {
     ok(k.init.serverInfo.name === 'kit-design-system-enforcer' && k.init.serverInfo.version === VERSION, JSON.stringify(k.init.serverInfo));
@@ -368,6 +782,7 @@ async function mcp() {
   const pkg = join(app, 'node_modules/design-system-enforcer');
   cpSync(ROOT, pkg, { recursive: true, filter: src => !/[/\\](node_modules|test|tests|docs|\.git|enforcer\.config\.json|package-lock\.json)$/.test(src) });
   symlinkSync(realpathSync(join(ROOT, 'node_modules/@modelcontextprotocol')), join(app, 'node_modules/@modelcontextprotocol'), 'dir');
+  symlinkSync(realpathSync(join(ROOT, 'node_modules/zod')), join(app, 'node_modules/zod'), 'dir');
   const installed = await mcpSession(app, { server: join(pkg, 'bin/ds-enforcer.mjs') });
   installed.close();
   test('bin: an install that hoists the SDK into the project starts the server without installing anything', () => {
